@@ -1,0 +1,129 @@
+import requests
+import pandas as pd
+import os
+import bcrypt
+from datetime import datetime
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
+
+load_dotenv()
+
+REGION = os.getenv('REGION')
+CSV_FILE = os.getenv('CSV_FILE')
+api_key = os.getenv('API_KEY')
+DATABASE_URL = os.getenv('DATABASE')
+engine = create_engine(DATABASE_URL)
+
+AGENT_CLASSES = {
+    'Jett': 'Duelist', 'Reyna': 'Duelist', 'Raze': 'Duelist', 'Phoenix': 'Duelist', 'Yoru': 'Duelist',
+    'Neon': 'Duelist', 'Iso': 'Duelist',
+    'Sova': 'Initiator', 'Breach': 'Initiator', 'Skye': 'Initiator', 'KAY/O': 'Initiator', 'Fade': 'Initiator',
+    'Gekko': 'Initiator', 'Tejo': 'Initiator',
+    'Omen': 'Controller', 'Brimstone': 'Controller', 'Viper': 'Controller', 'Astra': 'Controller',
+    'Harbor': 'Controller', 'Clove': 'Controller',
+    'Sage': 'Sentinel', 'Cypher': 'Sentinel', 'Killjoy': 'Sentinel', 'Chamber': 'Sentinel', 'Deadlock': 'Sentinel',
+    'Vyse': 'Sentinel'
+}
+
+
+def registrar_jogador(nick, tag, email, senha):
+    hash_senha = bcrypt.hashpw(senha.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    try:
+        with engine.connect() as conn:
+            query = text("INSERT INTO player (nick, player_tag, email, password) VALUES (:n, :t, :e, :p)")
+            conn.execute(query, {"n": nick, "t": tag, "e": email, "p": hash_senha})
+            conn.commit()
+        return True
+    except Exception as e:
+        print(f"Erro ao registrar: {e}")
+        return False
+
+
+def verificar_login(email, senha_tentativa):
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT id_player, nick, player_tag, password FROM player WHERE email = :e")
+            result = conn.execute(query, {"e": email}).fetchone()
+
+            if result and bcrypt.checkpw(senha_tentativa.encode('utf-8'), result[3].encode('utf-8')):
+                return {"id_player": result[0], "nick": result[1], "tag": result[2]}
+    except Exception as e:
+        print(f"Erro no login: {e}")
+    return None
+
+
+def get_historico_partidas(id_player):
+    """Busca as partidas de um jogador específico."""
+    try:
+        query = f"SELECT * FROM stats WHERE id_player = {id_player} ORDER BY date DESC"
+        df = pd.read_sql(query, engine)
+        if df.empty:
+            return []
+        df['date'] = df['date'].astype(str)
+        return df.to_dict(orient='records')
+    except Exception as e:
+        print(f"Erro ao ler banco: {e}")
+        return []
+
+
+def fetch_latest_matches(nick, tag):
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{REGION}/{nick}/{tag}?mode=competitive"
+    headers = {"Authorization": api_key}
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()['data']
+    return []
+
+
+def process_matches(matches_data, nick, tag, id_player):
+    my_stats = []
+    for match in matches_data:
+        if match.get('metadata') is None or match.get('players') is None:
+            continue
+
+        match_start = datetime.fromtimestamp(match['metadata']['game_start'])
+        my_player = next((p for p in match['players']['all_players'] if
+                          p['name'].lower().strip() == nick.lower().strip() and p[
+                              'tag'].lower().strip() == tag.lower().strip()), None)
+
+        if my_player:
+            agent = my_player['character']
+            headshots = my_player['stats']['headshots']
+            bodyshots = my_player['stats']['bodyshots']
+            legshots = my_player['stats']['legshots']
+            total_shots = headshots + bodyshots + legshots
+
+            stats = {
+                'id_player': id_player,
+                'match_id': match['metadata']['matchid'],
+                'date': match_start.strftime('%Y-%m-%d %H:%M:%S'),
+                'week': match_start.isocalendar()[1],
+                'agent': agent,
+                'class': AGENT_CLASSES.get(agent, 'Unknown'),
+                'kills': my_player['stats']['kills'],
+                'deaths': my_player['stats']['deaths'],
+                'score': my_player['stats']['score'],
+                'headshot_percent': (headshots / total_shots * 100) if total_shots > 0 else 0
+            }
+            my_stats.append(stats)
+    return pd.DataFrame(my_stats)
+
+
+def update_database(new_df):
+    if new_df.empty: return
+    new_df['headshot_percent'] = new_df['headshot_percent'].round(2)
+    try:
+        ids_existentes = pd.read_sql("SELECT match_id FROM stats", engine)['match_id'].tolist()
+        df_para_salvar = new_df[~new_df['match_id'].isin(ids_existentes)]
+    except Exception:
+        df_para_salvar = new_df
+
+    if df_para_salvar.empty: return
+
+    colunas_db = ['id_player', 'date', 'week', 'agent', 'kills', 'deaths', 'score', 'headshot_percent', 'class',
+                  'match_id']
+    df_final = df_para_salvar[colunas_db].copy()
+    try:
+        df_final.to_sql('stats', engine, if_exists='append', index=False)
+    except Exception as e:
+        print(f"Erro ao salvar: {e}")

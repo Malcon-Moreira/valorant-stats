@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+.env
+valorant-dashboard/node_modules/
+valorant-dashboard/dist/
