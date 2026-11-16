@@ -70,6 +70,7 @@ def fetch_latest_matches(nick, tag):
     headers = {"Authorization": api_key}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
+        print("Teste da API", response.json()['data'])
         return response.json()['data']
     return []
 
