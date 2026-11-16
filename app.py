@@ -48,5 +48,33 @@ def listar_partidas():
     partidas = get_historico_partidas(user['id_player'])
     return jsonify(partidas)
 
+
+@app.route('/api/cron/update-all', methods=['GET', 'POST'])
+def cron_update_all():
+    # Proteção: Verifica se quem chamou tem a senha do Cron
+    cron_token = request.headers.get('Authorization')
+    senha_cron = os.getenv('CRON_SECRET')
+
+    if not senha_cron or cron_token != f"Bearer {senha_cron}":
+        return jsonify({"erro": "Acesso negado. Token de Cron inválido."}), 401
+
+    jogadores = get_all_players()
+    sucessos = 0
+
+    for jogador in jogadores:
+        try:
+            raw_matches = fetch_latest_matches(jogador['nick'], jogador['tag'])
+            if raw_matches:
+                df_new = process_matches(raw_matches, jogador['nick'], jogador['tag'], jogador['id_player'])
+                update_database(df_new)
+                sucessos += 1
+        except Exception as e:
+            print(f"Erro ao atualizar {jogador['nick']}#{jogador['tag']}: {e}")
+
+    return jsonify({
+        "status": "sucesso",
+        "msg": f"Rotina finalizada. {sucessos} de {len(jogadores)} jogadores atualizados."
+    }), 200
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

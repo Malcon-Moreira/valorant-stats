@@ -139,6 +139,16 @@ def process_matches(matches_data, nick, tag, id_player):
             my_stats.append(stats)
     return pd.DataFrame(my_stats)
 
+def get_all_players():
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT id_player, nick, player_tag FROM player")
+            result = conn.execute(query).fetchall()
+            return [{"id_player": row[0], "nick": row[1], "tag": row[2]} for row in result]
+    except Exception as e:
+        print(f"Erro ao buscar jogadores para o Cron: {e}")
+        return []
+
 
 def update_database(new_df):
     if new_df.empty: return
