@@ -83,9 +83,10 @@ def fetch_latest_matches(nick, tag):
 
 def process_matches(matches_data, nick, tag, id_player):
     my_stats = []
-    # Usamos isocalendar()[1] para descobrir o número da semana atual do ano
-    semana_atual = datetime.now().isocalendar()[1]
-    ano_atual = datetime.now().year
+
+    # Nova Lógica: Pega a data de agora e subtrai 7 dias
+    agora = datetime.now()
+    limite_7_dias = agora - timedelta(days=7)
 
     for match in matches_data:
         if match.get('metadata') is None or match.get('players') is None:
@@ -93,8 +94,8 @@ def process_matches(matches_data, nick, tag, id_player):
 
         match_start = datetime.fromtimestamp(match['metadata']['game_start'])
 
-        # Filtro semanal: Descarta o que não for da semana e ano atuais
-        if match_start.isocalendar()[1] != semana_atual or match_start.year != ano_atual:
+        # Se a partida for mais antiga que 7 dias atrás, descarta
+        if match_start < limite_7_dias:
             continue
 
         my_player = next((p for p in match['players']['all_players'] if
