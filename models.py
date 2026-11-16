@@ -5,6 +5,7 @@ import bcrypt
 from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+import urllib.parse
 
 load_dotenv()
 
@@ -65,7 +66,13 @@ def get_historico_partidas(id_player):
 
 
 def fetch_latest_matches(nick, tag):
-    url = f"https://api.henrikdev.xyz/valorant/v3/matches/na/{nick}/{tag}?mode=competitive"
+    # urllib.parse evita que nicks com espaço quebrem a requisição
+    nick_seguro = urllib.parse.quote(nick.strip())
+    tag_segura = urllib.parse.quote(tag.strip())
+
+    # size=100 traz o histórico máximo permitido pela API de uma só vez
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/na/{nick_seguro}/{tag_segura}?mode=competitive&size=100"
+
     headers = {"Authorization": api_key}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
@@ -76,7 +83,8 @@ def fetch_latest_matches(nick, tag):
 
 def process_matches(matches_data, nick, tag, id_player):
     my_stats = []
-    mes_atual = datetime.now().month
+    # Usamos isocalendar()[1] para descobrir o número da semana atual do ano
+    semana_atual = datetime.now().isocalendar()[1]
     ano_atual = datetime.now().year
 
     for match in matches_data:
@@ -84,7 +92,9 @@ def process_matches(matches_data, nick, tag, id_player):
             continue
 
         match_start = datetime.fromtimestamp(match['metadata']['game_start'])
-        if match_start.month != mes_atual or match_start.year != ano_atual:
+
+        # Filtro semanal: Descarta o que não for da semana e ano atuais
+        if match_start.isocalendar()[1] != semana_atual or match_start.year != ano_atual:
             continue
 
         my_player = next((p for p in match['players']['all_players'] if
@@ -98,7 +108,6 @@ def process_matches(matches_data, nick, tag, id_player):
             legshots = my_player['stats']['legshots']
             total_shots = headshots + bodyshots + legshots
 
-            # --- NOVA LÓGICA DE VITÓRIA/DERROTA E MAPA ---
             equipa = my_player['team'].lower()
             venceu = match['teams'][equipa]['has_won']
             rondas_red = match['teams']['red']['rounds_won']
@@ -112,7 +121,6 @@ def process_matches(matches_data, nick, tag, id_player):
                 resultado = 'Derrota'
 
             mapa = match['metadata']['map']
-            # ---------------------------------------------
 
             stats = {
                 'id_player': id_player,
@@ -125,8 +133,8 @@ def process_matches(matches_data, nick, tag, id_player):
                 'deaths': my_player['stats']['deaths'],
                 'score': my_player['stats']['score'],
                 'headshot_percent': (headshots / total_shots * 100) if total_shots > 0 else 0,
-                'result': resultado,  # Nova coluna
-                'map': mapa  # Nova coluna
+                'result': resultado,
+                'map': mapa
             }
             my_stats.append(stats)
     return pd.DataFrame(my_stats)
