@@ -8,7 +8,6 @@ from sqlalchemy import create_engine, text
 
 load_dotenv()
 
-REGION = os.getenv('REGION')
 CSV_FILE = os.getenv('CSV_FILE')
 api_key = os.getenv('API_KEY')
 DATABASE_URL = os.getenv('DATABASE')
@@ -67,7 +66,7 @@ def get_historico_partidas(id_player):
 
 
 def fetch_latest_matches(nick, tag):
-    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{REGION}/{nick}/{tag}?mode=competitive"
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/na/{nick}/{tag}?mode=competitive"
     headers = {"Authorization": api_key}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
