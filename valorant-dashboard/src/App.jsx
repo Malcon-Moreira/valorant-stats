@@ -1,11 +1,10 @@
 import React, { useMemo, useState, useEffect } from 'react';
-// 1. Adicionadas as importações do React Router e da tela de Auth
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Auth from './pages/Auth';
 
 import {
   Crosshair, Target, Trophy, Swords,
-  Calendar, User, ChevronUp
+  Calendar, User, ChevronUp, Map, Activity
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -32,7 +31,6 @@ export default function App() {
   );
 }
 
-// O export default foi removido daqui, pois o App já é o default
 function ValorantDashboard() {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -40,7 +38,6 @@ function ValorantDashboard() {
   useEffect(() => {
     const token = localStorage.getItem('token');
 
-    // 1. Vai imprimir no console exatamente o que o React está a tentar enviar
     console.log("Token lido do localStorage:", token);
 
     if (!token || token === 'undefined' || token === 'null') {
@@ -51,12 +48,11 @@ function ValorantDashboard() {
 
     fetch('https://valorant-backend-76hl.onrender.com/api/matches', {
       headers: {
-        'Authorization': `Bearer ${token}` // Atenção ao espaço depois de Bearer
+        'Authorization': `Bearer ${token}`
       }
     })
       .then(async response => {
         if (!response.ok) {
-          // 2. Vai capturar o motivo exato pelo qual o Flask recusou (o erro 422)
           const errorData = await response.json();
           console.error("O Flask recusou a requisição. Motivo:", errorData);
           throw new Error("Falha na autorização");
@@ -100,6 +96,25 @@ function ValorantDashboard() {
     }));
   }, [matches]);
 
+  const extraStats = useMemo(() => {
+    if (!matches.length) return { winRate: 0, favoriteMap: 'N/A' };
+
+    const vitorias = matches.filter(p => p.result === 'Vitória').length;
+    const empates = matches.filter(p => p.result === 'Empate').length;
+    const totalPartidasValidas = matches.length - empates;
+
+    const winRate = totalPartidasValidas > 0
+      ? ((vitorias / totalPartidasValidas) * 100).toFixed(1)
+      : 0;
+
+    const mapas = matches.filter(p => p.map).map(p => p.map);
+    const mapaFavorito = mapas.length > 0
+      ? mapas.sort((a,b) => mapas.filter(v => v===a).length - mapas.filter(v => v===b).length).pop()
+      : 'N/A';
+
+    return { winRate, favoriteMap: mapaFavorito };
+  }, [matches]);
+
   const getClassColor = (agentClass) => {
     switch(agentClass) {
       case 'Duelist': return 'text-orange-400 bg-orange-400/10 border-orange-400/20';
@@ -120,7 +135,6 @@ function ValorantDashboard() {
 
   return (
     <div className="min-h-screen bg-[#0f1923] text-slate-200 font-sans selection:bg-[#ff4655] selection:text-white">
-      {/* Navbar Superior */}
       <nav className="bg-[#1f2326] border-b border-slate-800 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -132,7 +146,6 @@ function ValorantDashboard() {
                 Valo<span className="text-[#ff4655]">Stats</span>
               </span>
             </div>
-            {/* Botão de Sair adicionado na Navbar */}
             <button
               onClick={() => {
                 localStorage.removeItem('token');
@@ -147,14 +160,12 @@ function ValorantDashboard() {
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        {/* Cabeçalho */}
         <div>
           <h1 className="text-3xl font-bold text-white tracking-wide uppercase">Seu Desempenho</h1>
           <p className="text-slate-400 mt-1">Análise das suas estatísticas recentes puxadas do Neon.</p>
         </div>
 
-        {/* Cards de Resumo */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
           <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
             <div className="flex justify-between items-start">
               <div>
@@ -164,27 +175,49 @@ function ValorantDashboard() {
               <Crosshair className="w-6 h-6 text-[#ff4655]" />
             </div>
           </div>
+
           <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
             <div className="flex justify-between items-start">
               <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot Médio</p>
+                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot</p>
                 <h3 className="text-4xl font-bold text-white mt-2">{stats.hs}%</h3>
               </div>
               <Target className="w-6 h-6 text-[#ff4655]" />
             </div>
           </div>
+
           <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
             <div className="flex justify-between items-start">
               <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Combat Score (Média)</p>
+                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Score</p>
                 <h3 className="text-4xl font-bold text-white mt-2">{stats.score}</h3>
               </div>
               <Trophy className="w-6 h-6 text-[#ff4655]" />
             </div>
           </div>
+
+          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Win Rate</p>
+                <h3 className="text-4xl font-bold text-white mt-2">{extraStats.winRate}%</h3>
+              </div>
+              <Activity className="w-6 h-6 text-[#ff4655]" />
+            </div>
+          </div>
+
+          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Melhor Mapa</p>
+                <h3 className="text-xl font-bold text-white mt-2 truncate max-w-[120px]" title={extraStats.favoriteMap}>
+                  {extraStats.favoriteMap}
+                </h3>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Gráfico */}
         <div className="bg-[#1f2326] rounded-xl shadow-lg p-6 border border-slate-800">
           <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
             <Calendar className="w-5 h-5 text-[#ff4655]" />
@@ -205,7 +238,6 @@ function ValorantDashboard() {
           </div>
         </div>
 
-        {/* Tabela */}
         <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
           <div className="p-6 border-b border-slate-800">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">

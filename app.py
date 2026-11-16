@@ -28,7 +28,6 @@ def login():
     if not user:
         return jsonify({"msg": "Email ou senha incorretos"}), 401
 
-    # Transforma o dicionário numa string antes de criar o token
     user_string = json.dumps(user)
     access_token = create_access_token(identity=user_string)
 
@@ -38,11 +37,9 @@ def login():
 @app.route('/api/matches', methods=['GET'])
 @jwt_required()
 def listar_partidas():
-    # Pega a string do token e converte de volta para dicionário
     user_string = get_jwt_identity()
     user = json.loads(user_string)
 
-    # O resto continua exatamente igual!
     raw_matches = fetch_latest_matches(user['nick'], user['tag'])
     if raw_matches:
         df_new = process_matches(raw_matches, user['nick'], user['tag'], user['id_player'])

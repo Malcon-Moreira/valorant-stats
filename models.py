@@ -67,7 +67,7 @@ def get_historico_partidas(id_player):
 
 
 def fetch_latest_matches(nick, tag):
-    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{REGION}/{nick}/{tag}"
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{REGION}/{nick}/{tag}?mode=competitive"
     headers = {"Authorization": api_key}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
@@ -77,11 +77,17 @@ def fetch_latest_matches(nick, tag):
 
 def process_matches(matches_data, nick, tag, id_player):
     my_stats = []
+    mes_atual = datetime.now().month
+    ano_atual = datetime.now().year
+
     for match in matches_data:
         if match.get('metadata') is None or match.get('players') is None:
             continue
 
         match_start = datetime.fromtimestamp(match['metadata']['game_start'])
+        if match_start.month != mes_atual or match_start.year != ano_atual:
+            continue
+
         my_player = next((p for p in match['players']['all_players'] if
                           p['name'].lower().strip() == nick.lower().strip() and p[
                               'tag'].lower().strip() == tag.lower().strip()), None)
@@ -93,6 +99,22 @@ def process_matches(matches_data, nick, tag, id_player):
             legshots = my_player['stats']['legshots']
             total_shots = headshots + bodyshots + legshots
 
+            # --- NOVA LÓGICA DE VITÓRIA/DERROTA E MAPA ---
+            equipa = my_player['team'].lower()
+            venceu = match['teams'][equipa]['has_won']
+            rondas_red = match['teams']['red']['rounds_won']
+            rondas_blue = match['teams']['blue']['rounds_won']
+
+            if venceu:
+                resultado = 'Vitória'
+            elif rondas_red == rondas_blue:
+                resultado = 'Empate'
+            else:
+                resultado = 'Derrota'
+
+            mapa = match['metadata']['map']
+            # ---------------------------------------------
+
             stats = {
                 'id_player': id_player,
                 'match_id': match['metadata']['matchid'],
@@ -103,7 +125,9 @@ def process_matches(matches_data, nick, tag, id_player):
                 'kills': my_player['stats']['kills'],
                 'deaths': my_player['stats']['deaths'],
                 'score': my_player['stats']['score'],
-                'headshot_percent': (headshots / total_shots * 100) if total_shots > 0 else 0
+                'headshot_percent': (headshots / total_shots * 100) if total_shots > 0 else 0,
+                'result': resultado,  # Nova coluna
+                'map': mapa  # Nova coluna
             }
             my_stats.append(stats)
     return pd.DataFrame(my_stats)
@@ -120,8 +144,8 @@ def update_database(new_df):
 
     if df_para_salvar.empty: return
 
-    colunas_db = ['id_player', 'date', 'week', 'agent', 'kills', 'deaths', 'score', 'headshot_percent', 'class',
-                  'match_id']
+    # Adicionámos 'result' e 'map' à lista de colunas permitidas
+    colunas_db = ['id_player', 'date', 'week', 'agent', 'kills', 'deaths', 'score', 'headshot_percent', 'class', 'match_id', 'result', 'map']
     df_final = df_para_salvar[colunas_db].copy()
     try:
         df_final.to_sql('stats', engine, if_exists='append', index=False)
