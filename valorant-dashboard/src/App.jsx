@@ -49,7 +49,7 @@ function ValorantDashboard() {
         return;
     }
 
-    fetch('http://localhost:5000/api/matches', {
+    fetch('https://valorant-backend-76hl.onrender.com/api/matches', {
       headers: {
         'Authorization': `Bearer ${token}` // Atenção ao espaço depois de Bearer
       }

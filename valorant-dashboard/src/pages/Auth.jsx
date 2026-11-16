@@ -8,7 +8,7 @@ export default function Auth() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const endpoint = isLogin ? 'http://localhost:5000/login' : 'http://localhost:5000/register';
+    const endpoint = isLogin ? 'https://valorant-backend-76hl.onrender.com/login' : 'https://valorant-backend-76hl.onrender.com/register';
 
     const response = await fetch(endpoint, {
       method: 'POST',
