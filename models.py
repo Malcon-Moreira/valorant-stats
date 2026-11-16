@@ -2,7 +2,7 @@ import requests
 import pandas as pd
 import os
 import bcrypt
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 import urllib.parse
@@ -84,7 +84,6 @@ def fetch_latest_matches(nick, tag):
 def process_matches(matches_data, nick, tag, id_player):
     my_stats = []
 
-    # Nova Lógica: Pega a data de agora e subtrai 7 dias
     agora = datetime.now()
     limite_7_dias = agora - timedelta(days=7)
 
