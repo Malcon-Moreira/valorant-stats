@@ -8,7 +8,6 @@ from sqlalchemy import create_engine, text
 
 load_dotenv()
 
-CSV_FILE = os.getenv('CSV_FILE')
 api_key = os.getenv('API_KEY')
 DATABASE_URL = os.getenv('DATABASE')
 engine = create_engine(DATABASE_URL)

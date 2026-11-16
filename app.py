@@ -49,5 +49,27 @@ def listar_partidas():
     return jsonify(partidas)
 
 
+@app.route('/test-riot', methods=['GET'])
+def test_riot():
+    import requests
+    # Vamos verificar se o Render está a ler as chaves corretamente
+    chave = os.getenv('API_KEY')
+    regiao = os.getenv('REGION', 'br')
+
+    # URL forçada com o seu nick (já com %20 no espaço para evitar erros)
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{regiao}/Vivano%20Steak/zandn?size=1"
+    headers = {"Authorization": chave} if chave else {}
+
+    try:
+        resp = requests.get(url, headers=headers)
+        return jsonify({
+            "1_status_code": resp.status_code,
+            "2_api_key_configurada_no_render": bool(chave),
+            "3_regiao_lida_pelo_render": regiao,
+            "4_resposta_da_riot": resp.json() if resp.status_code == 200 else resp.text
+        })
+    except Exception as e:
+        return jsonify({"erro": str(e)})
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
