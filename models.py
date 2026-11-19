@@ -68,7 +68,7 @@ def get_historico_partidas(id_player):
 def fetch_latest_matches(nick, tag):
     # urllib.parse evita que nicks com espaço quebrem a requisição
     nick_seguro = urllib.parse.quote(nick.strip())
-    tag_segura = urllib.parse.quote(tag.strip())
+    tag_segura = urllib.parse.quote(tag.strip().lstrip('#'))
 
     # size=100 traz o histórico máximo permitido pela API de uma só vez
     url = f"https://api.henrikdev.xyz/valorant/v3/matches/na/{nick_seguro}/{tag_segura}?mode=competitive&size=100"
@@ -76,9 +76,60 @@ def fetch_latest_matches(nick, tag):
     headers = {"Authorization": api_key}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
-        print("Teste da API", response.json()['data'])
         return response.json()['data']
     return []
+
+
+def update_player_profile(id_player, nick, tag, card_url=None):
+    """Atualiza card, elo e RR do jogador na tabela player."""
+    nick_seguro = urllib.parse.quote(nick.strip())
+    tag_segura = urllib.parse.quote(tag.strip().lstrip('#'))
+    headers = {"Authorization": api_key}
+
+    elo, rr = None, None
+    try:
+        mmr_url = f"https://api.henrikdev.xyz/valorant/v1/mmr/na/{nick_seguro}/{tag_segura}"
+        res = requests.get(mmr_url, headers=headers)
+        if res.status_code == 200:
+            data = res.json().get('data', {})
+            elo = data.get('currenttierpatched')
+            rr = data.get('ranking_in_tier', 0)
+    except Exception as e:
+        print(f"Erro ao buscar MMR de {nick}#{tag}: {e}")
+
+    try:
+        with engine.connect() as conn:
+            query = text("""
+                UPDATE player
+                SET card_url = COALESCE(:card, card_url),
+                    elo = COALESCE(:elo, elo),
+                    rr = COALESCE(:rr, rr)
+                WHERE id_player = :id
+            """)
+            conn.execute(query, {"card": card_url, "elo": elo, "rr": rr, "id": id_player})
+            conn.commit()
+    except Exception as e:
+        print(f"Erro ao atualizar perfil no banco: {e}")
+
+
+def get_player_profile(id_player):
+    """Retorna nick, tag, card, elo e RR de um jogador."""
+    try:
+        with engine.connect() as conn:
+            query = text("SELECT id_player, nick, player_tag, card_url, elo, rr FROM player WHERE id_player = :id")
+            row = conn.execute(query, {"id": id_player}).fetchone()
+            if row:
+                return {
+                    "id_player": row[0],
+                    "nick": row[1],
+                    "tag": row[2],
+                    "card_url": row[3],
+                    "elo": row[4] or "Unranked",
+                    "rr": row[5] or 0
+                }
+    except Exception as e:
+        print(f"Erro ao buscar perfil: {e}")
+    return None
 
 
 def process_matches(matches_data, nick, tag, id_player):
@@ -137,7 +188,22 @@ def process_matches(matches_data, nick, tag, id_player):
                 'map': mapa
             }
             my_stats.append(stats)
+
+    # Pega o card da partida mais recente e atualiza o perfil (fora do loop!)
+    card_url = None
+    for match in matches_data:
+        if match.get('players'):
+            p = next((x for x in match['players']['all_players']
+                      if x['name'].lower().strip() == nick.lower().strip()
+                      and x['tag'].lower().strip() == tag.lower().strip()), None)
+            if p and p.get('assets', {}).get('card', {}).get('wide'):
+                card_url = p['assets']['card']['wide']
+                break
+
+    update_player_profile(id_player, nick, tag, card_url)
+
     return pd.DataFrame(my_stats)
+
 
 def get_all_players():
     try:
@@ -151,7 +217,8 @@ def get_all_players():
 
 
 def update_database(new_df):
-    if new_df.empty: return
+    if new_df.empty:
+        return
     new_df['headshot_percent'] = new_df['headshot_percent'].round(2)
     id_player = int(new_df['id_player'].iloc[0])
 
@@ -162,7 +229,8 @@ def update_database(new_df):
     except Exception:
         df_para_salvar = new_df
 
-    if df_para_salvar.empty: return
+    if df_para_salvar.empty:
+        return
 
     colunas_db = ['id_player', 'date', 'week', 'agent', 'kills', 'deaths', 'score', 'headshot_percent', 'class', 'match_id', 'result', 'map']
     df_final = df_para_salvar[colunas_db].copy()
@@ -172,10 +240,11 @@ def update_database(new_df):
         print(f"Erro ao salvar: {e}")
         raise e
 
+
 def get_leaderboard():
     try:
         query = """
-            SELECT p.nick, p.player_tag,
+            SELECT p.id_player, p.nick, p.player_tag,
                    COUNT(s.match_id) as partidas,
                    SUM(s.kills) as total_kills,
                    AVG(s.kills) as media_kills,
@@ -190,7 +259,7 @@ def get_leaderboard():
         """
         df = pd.read_sql(query, engine)
         if df.empty:
-            return {"highlights": None, "ranking": []}
+            return {"highlights": None, "best_by_class": {}, "ranking": []}
 
         df['kd'] = df.apply(
             lambda r: round(r['total_kills'] / r['total_deaths'], 2) if r['total_deaths'] > 0 else float(r['total_kills']),
@@ -223,10 +292,47 @@ def get_leaderboard():
             "most_wins": df.loc[df['vitorias'].idxmax()].to_dict(),
         }
 
+        # Melhor jogador por classe de agente
+        class_query = """
+            SELECT p.id_player, p.nick, p.player_tag, s.class,
+                   COUNT(s.match_id) as partidas,
+                   SUM(s.kills) as total_kills,
+                   SUM(s.deaths) as total_deaths,
+                   AVG(s.score) as score_medio,
+                   AVG(s.headshot_percent) as hs_medio,
+                   SUM(CASE WHEN s.result = 'Vitória' THEN 1 ELSE 0 END) as vitorias
+            FROM player p
+            JOIN stats s ON p.id_player = s.id_player
+            WHERE CAST(s.date AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '7 days'
+              AND s.class IN ('Duelist', 'Initiator', 'Controller', 'Sentinel')
+            GROUP BY p.id_player, p.nick, p.player_tag, s.class
+        """
+        df_class = pd.read_sql(class_query, engine)
+        best_by_class = {}
+
+        if not df_class.empty:
+            df_class['kd'] = df_class.apply(
+                lambda r: round(r['total_kills'] / r['total_deaths'], 2) if r['total_deaths'] > 0 else float(r['total_kills']),
+                axis=1
+            )
+            df_class['win_rate'] = ((df_class['vitorias'] / df_class['partidas']) * 100).round(1)
+            df_class['rating'] = (
+                (df_class['kd'] * 30) +
+                (df_class['score_medio'] * 0.25) +
+                (df_class['win_rate'] * 0.20) +
+                (df_class['hs_medio'] * 0.5)
+            ).round(1)
+
+            for role in ['Duelist', 'Initiator', 'Controller', 'Sentinel']:
+                sub = df_class[df_class['class'] == role]
+                if not sub.empty:
+                    best_by_class[role] = sub.loc[sub['rating'].idxmax()].to_dict()
+
         return {
             "highlights": highlights,
+            "best_by_class": best_by_class,
             "ranking": df.to_dict(orient='records')
         }
     except Exception as e:
         print(f"Erro ao gerar leaderboard: {e}")
-        return {"highlights": None, "ranking": []}
+        return {"highlights": None, "best_by_class": {}, "ranking": []}

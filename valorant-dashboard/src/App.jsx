@@ -33,12 +33,20 @@ export default function App() {
 
 function ValorantDashboard() {
   const [matches, setMatches] = useState([]);
-  const [leaderboard, setLeaderboard] = useState({ highlights: null, ranking: [] });
+  const [profile, setProfile] = useState(null);
+  const [viewingFriend, setViewingFriend] = useState(false);
+  const [leaderboard, setLeaderboard] = useState({
+    highlights: null,
+    best_by_class: {},
+    ranking: []
+  });
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('personal');
   const [roleFilter, setRoleFilter] = useState('All');
 
-  useEffect(() => {
+  const baseUrl = 'https://valorant-backend-76hl.onrender.com';
+
+  const loadMyData = () => {
     const token = localStorage.getItem('token');
 
     if (!token || token === 'undefined' || token === 'null') {
@@ -47,8 +55,8 @@ function ValorantDashboard() {
       return;
     }
 
+    setLoading(true);
     const headers = { 'Authorization': `Bearer ${token}` };
-    const baseUrl = 'https://valorant-backend-76hl.onrender.com';
 
     Promise.all([
       fetch(`${baseUrl}/api/matches`, { headers }),
@@ -61,7 +69,10 @@ function ValorantDashboard() {
           throw new Error("Falha na autorização");
         }
         const dataMatches = await resMatches.json();
-        setMatches(dataMatches);
+        setMatches(dataMatches.matches || []);
+        setProfile(dataMatches.profile || null);
+        setViewingFriend(false);
+        setRoleFilter('All');
 
         if (resLeaderboard.ok) {
           const dataLeaderboard = await resLeaderboard.json();
@@ -73,7 +84,34 @@ function ValorantDashboard() {
         console.error("Erro no processo:", error);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    loadMyData();
   }, []);
+
+  const handleViewPlayer = async (idPlayer) => {
+    if (!idPlayer) return;
+    const token = localStorage.getItem('token');
+    setLoading(true);
+    try {
+      const res = await fetch(`${baseUrl}/api/player/${idPlayer}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setProfile(data.profile);
+        setMatches(data.matches || []);
+        setViewingFriend(true);
+        setRoleFilter('All');
+        setActiveTab('personal');
+      }
+    } catch (error) {
+      console.error("Erro ao carregar perfil do jogador:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const filteredMatches = useMemo(() => {
     if (roleFilter === 'All') return matches;
@@ -99,14 +137,6 @@ function ValorantDashboard() {
     };
   }, [filteredMatches]);
 
-  const chartData = useMemo(() => {
-    return [...filteredMatches].reverse().map((match, index) => ({
-      name: `P${index + 1} (${match.agent})`,
-      Kills: match.kills,
-      Deaths: match.deaths,
-    }));
-  }, [filteredMatches]);
-
   const extraStats = useMemo(() => {
     if (!filteredMatches.length) return { winRate: 0, favoriteMap: 'N/A' };
 
@@ -124,6 +154,40 @@ function ValorantDashboard() {
       : 'N/A';
 
     return { winRate, favoriteMap: mapaFavorito };
+  }, [filteredMatches]);
+
+  const eloProjection = useMemo(() => {
+    if (!profile || !filteredMatches.length) return null;
+    const wr = parseFloat(extraStats.winRate) / 100;
+    const kd = parseFloat(stats.kd);
+    const rr = profile.rr || 0;
+
+    // Estima ganho/perda média de RR ponderada pelo K/D
+    const avgWinRR = Math.min(30, Math.max(14, 20 + (kd - 1) * 5));
+    const avgLossRR = Math.min(26, Math.max(12, 18 - (kd - 1) * 4));
+    const expectedRRPerMatch = (wr * avgWinRR) - ((1 - wr) * avgLossRR);
+
+    if (expectedRRPerMatch > 0.5) {
+      const matchesToRankUp = Math.ceil((100 - rr) / expectedRRPerMatch);
+      return {
+        status: 'up',
+        text: `~${matchesToRankUp} partidas para subir de elo`,
+        detail: `Média estimada de +${expectedRRPerMatch.toFixed(1)} RR por partida`
+      };
+    }
+    return {
+      status: 'down',
+      text: 'Tendência de estagnação / queda',
+      detail: `Média estimada de ${expectedRRPerMatch.toFixed(1)} RR por partida`
+    };
+  }, [profile, extraStats.winRate, stats.kd, filteredMatches.length]);
+
+  const chartData = useMemo(() => {
+    return [...filteredMatches].reverse().map((match, index) => ({
+      name: `P${index + 1} (${match.agent})`,
+      Kills: match.kills,
+      Deaths: match.deaths,
+    }));
   }, [filteredMatches]);
 
   const getClassColor = (agentClass) => {
@@ -160,7 +224,12 @@ function ValorantDashboard() {
 
             <div className="flex items-center gap-4">
               <button
-                onClick={() => setActiveTab('personal')}
+                onClick={() => {
+                  if (viewingFriend) {
+                    loadMyData();
+                  }
+                  setActiveTab('personal');
+                }}
                 className={`px-4 py-2 rounded-md font-semibold transition-colors ${
                   activeTab === 'personal' ? 'bg-[#ff4655] text-white' : 'text-slate-400 hover:text-white'
                 }`}
@@ -191,13 +260,61 @@ function ValorantDashboard() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
 
-        {/* ABA 1: MEU PERFIL */}
+        {/* ABA 1: PERFIL DO JOGADOR */}
         {activeTab === 'personal' && (
           <>
+            {viewingFriend && (
+              <button
+                onClick={loadMyData}
+                className="text-sm text-[#ff4655] hover:underline font-semibold"
+              >
+                ← Voltar para o meu perfil
+              </button>
+            )}
+
+            {/* Banner do Jogador (Card + Nick + Elo + Projeção) */}
+            {profile && (
+              <div className="bg-[#1f2326] rounded-xl border border-slate-800 overflow-hidden shadow-lg flex flex-col md:flex-row items-center justify-between p-6 gap-6">
+                <div className="flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left">
+                  {profile.card_url && (
+                    <img
+                      src={profile.card_url}
+                      alt="Player Card"
+                      className="h-20 w-44 object-cover rounded-lg border border-slate-700"
+                    />
+                  )}
+                  <div>
+                    <h2 className="text-2xl font-bold text-white">
+                      {profile.nick}
+                      <span className="text-slate-500 text-lg font-normal">#{profile.tag}</span>
+                    </h2>
+                    <p className="text-slate-400 text-sm mt-1">
+                      Elo atual: <span className="text-white font-semibold">{profile.elo}</span> •{' '}
+                      <span className="text-[#ff4655] font-bold">{profile.rr} RR</span>
+                    </p>
+                  </div>
+                </div>
+
+                {eloProjection && (
+                  <div className={`px-4 py-3 rounded-lg border text-center md:text-right ${
+                    eloProjection.status === 'up'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-red-500/10 border-red-500/30 text-red-400'
+                  }`}>
+                    <p className="text-xs uppercase font-bold tracking-wider">Projeção de Elo</p>
+                    <p className="text-base font-bold text-white mt-0.5">{eloProjection.text}</p>
+                    <p className="text-xs opacity-80">{eloProjection.detail}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
               <div>
-                <h1 className="text-3xl font-bold text-white tracking-wide uppercase">Seu Desempenho</h1>
-                <p className="text-slate-400 mt-1">Análise das suas estatísticas recentes puxadas do Neon.</p>
+                <h1 className="text-3xl font-bold text-white tracking-wide uppercase">
+                  {viewingFriend ? `Desempenho de ${profile?.nick}` : 'Seu Desempenho'}
+                </h1>
+                <p className="text-slate-400 mt-1">Análise das estatísticas recentes.</p>
               </div>
 
               <div className="flex items-center gap-2 bg-[#1f2326] p-1.5 rounded-lg border border-slate-800 w-fit">
@@ -217,7 +334,7 @@ function ValorantDashboard() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">K/D Médio</p>
@@ -227,7 +344,7 @@ function ValorantDashboard() {
                 </div>
               </div>
 
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot</p>
@@ -237,7 +354,7 @@ function ValorantDashboard() {
                 </div>
               </div>
 
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Score</p>
@@ -247,7 +364,7 @@ function ValorantDashboard() {
                 </div>
               </div>
 
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Win Rate</p>
@@ -257,7 +374,7 @@ function ValorantDashboard() {
                 </div>
               </div>
 
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Melhor Mapa</p>
@@ -364,7 +481,7 @@ function ValorantDashboard() {
               <h1 className="text-3xl font-bold text-white tracking-wide uppercase flex items-center gap-3">
                 <Users className="text-[#ff4655]" /> Placar de Líderes Semanal
               </h1>
-              <p className="text-slate-400 mt-1">Destaques e classificação geral dos últimos 7 dias.</p>
+              <p className="text-slate-400 mt-1">Clique em qualquer jogador para ver suas estatísticas detalhadas.</p>
             </div>
 
             {!leaderboard.highlights ? (
@@ -373,15 +490,19 @@ function ValorantDashboard() {
               </div>
             ) : (
               <>
+                {/* 6 Destaques da Semana */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   <div className="bg-[#1f2326] border-t-4 border-t-yellow-400 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="min-w-0">
                         <p className="text-yellow-400 text-xs font-bold uppercase tracking-wider">MVP da Semana</p>
-                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                        <button
+                          onClick={() => handleViewPlayer(leaderboard.highlights.mvp.id_player)}
+                          className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
+                        >
                           {leaderboard.highlights.mvp.nick}
                           <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.mvp.player_tag}</span>
-                        </h3>
+                        </button>
                         <p className="text-slate-400 text-sm mt-2">
                           Rating: <span className="text-white font-bold">{leaderboard.highlights.mvp.rating}</span> • K/D: {leaderboard.highlights.mvp.kd}
                         </p>
@@ -392,12 +513,15 @@ function ValorantDashboard() {
 
                   <div className="bg-[#1f2326] border-t-4 border-t-red-600 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-red-500 text-xs font-bold uppercase tracking-wider">Pior da Semana</p>
-                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                      <div className="min-w-0">
+                        <p className="text-red-500 text-xs font-bold uppercase tracking-wider">Fracassado da Semana</p>
+                        <button
+                          onClick={() => handleViewPlayer(leaderboard.highlights.worst.id_player)}
+                          className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
+                        >
                           {leaderboard.highlights.worst.nick}
                           <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.worst.player_tag}</span>
-                        </h3>
+                        </button>
                         <p className="text-slate-400 text-sm mt-2">
                           Rating: <span className="text-white font-bold">{leaderboard.highlights.worst.rating}</span> • K/D: {leaderboard.highlights.worst.kd}
                         </p>
@@ -408,12 +532,15 @@ function ValorantDashboard() {
 
                   <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="min-w-0">
                         <p className="text-[#ff4655] text-xs font-bold uppercase tracking-wider">Maior Média de Kills</p>
-                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                        <button
+                          onClick={() => handleViewPlayer(leaderboard.highlights.top_kills.id_player)}
+                          className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
+                        >
                           {leaderboard.highlights.top_kills.nick}
                           <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.top_kills.player_tag}</span>
-                        </h3>
+                        </button>
                         <p className="text-slate-400 text-sm mt-2">
                           <span className="text-white font-bold">{leaderboard.highlights.top_kills.media_kills}</span> kills / partida
                         </p>
@@ -424,12 +551,15 @@ function ValorantDashboard() {
 
                   <div className="bg-[#1f2326] border-t-4 border-t-slate-400 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="min-w-0">
                         <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">Quem Mais Morreu</p>
-                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                        <button
+                          onClick={() => handleViewPlayer(leaderboard.highlights.most_deaths.id_player)}
+                          className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
+                        >
                           {leaderboard.highlights.most_deaths.nick}
                           <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.most_deaths.player_tag}</span>
-                        </h3>
+                        </button>
                         <p className="text-slate-400 text-sm mt-2">
                           <span className="text-white font-bold">{leaderboard.highlights.most_deaths.total_deaths}</span> mortes no total
                         </p>
@@ -440,12 +570,15 @@ function ValorantDashboard() {
 
                   <div className="bg-[#1f2326] border-t-4 border-t-purple-400 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Maior Taxa de HS</p>
-                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                      <div className="min-w-0">
+                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Quem gosta de uma cabeçaS</p>
+                        <button
+                          onClick={() => handleViewPlayer(leaderboard.highlights.top_hs.id_player)}
+                          className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
+                        >
                           {leaderboard.highlights.top_hs.nick}
                           <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.top_hs.player_tag}</span>
-                        </h3>
+                        </button>
                         <p className="text-slate-400 text-sm mt-2">
                           <span className="text-white font-bold">{leaderboard.highlights.top_hs.hs_medio}%</span> de headshots
                         </p>
@@ -456,12 +589,15 @@ function ValorantDashboard() {
 
                   <div className="bg-[#1f2326] border-t-4 border-t-emerald-400 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
-                      <div>
+                      <div className="min-w-0">
                         <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider">Quem Mais Venceu</p>
-                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                        <button
+                          onClick={() => handleViewPlayer(leaderboard.highlights.most_wins.id_player)}
+                          className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
+                        >
                           {leaderboard.highlights.most_wins.nick}
                           <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.most_wins.player_tag}</span>
-                        </h3>
+                        </button>
                         <p className="text-slate-400 text-sm mt-2">
                           <span className="text-white font-bold">{leaderboard.highlights.most_wins.vitorias}</span> vitórias ({leaderboard.highlights.most_wins.win_rate}%)
                         </p>
@@ -471,6 +607,39 @@ function ValorantDashboard() {
                   </div>
                 </div>
 
+                {/* Melhores por Classe de Agente */}
+                {leaderboard.best_by_class && Object.keys(leaderboard.best_by_class).length > 0 && (
+                  <div>
+                    <h2 className="text-xl font-bold text-white uppercase tracking-wide mb-4">
+                      Melhores por Classe
+                    </h2>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {['Duelist', 'Initiator', 'Controller', 'Sentinel'].map((role) => {
+                        const p = leaderboard.best_by_class[role];
+                        if (!p) return null;
+                        return (
+                          <div key={role} className="bg-[#1f2326] rounded-xl p-5 border border-slate-800 shadow-lg">
+                            <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${getClassColor(role)}`}>
+                              {role}
+                            </span>
+                            <button
+                              onClick={() => handleViewPlayer(p.id_player)}
+                              className="block text-xl font-bold text-white mt-3 hover:text-[#ff4655] transition-colors truncate w-full text-left"
+                            >
+                              {p.nick}
+                              <span className="text-slate-500 text-xs font-normal">#{p.player_tag}</span>
+                            </button>
+                            <p className="text-slate-400 text-xs mt-1">
+                              Rating: <span className="text-white font-bold">{p.rating}</span> • K/D: {p.kd} ({p.partidas} jogos)
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Tabela Geral Ordenada por Rating */}
                 <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
@@ -487,14 +656,20 @@ function ValorantDashboard() {
                       </thead>
                       <tbody className="divide-y divide-slate-800/50">
                         {leaderboard.ranking.map((player, index) => (
-                          <tr key={index} className="hover:bg-slate-800/30 transition-colors">
+                          <tr key={player.id_player || index} className="hover:bg-slate-800/30 transition-colors">
                             <td className="p-4 text-center">
                               <span className={`text-lg font-bold ${index === 0 ? 'text-yellow-400' : index === 1 ? 'text-slate-300' : index === 2 ? 'text-amber-600' : 'text-slate-500'}`}>
                                 #{index + 1}
                               </span>
                             </td>
                             <td className="p-4 font-bold text-white">
-                              {player.nick}<span className="text-slate-500 text-sm font-normal">#{player.player_tag}</span>
+                              <button
+                                onClick={() => handleViewPlayer(player.id_player)}
+                                className="hover:text-[#ff4655] transition-colors text-left"
+                              >
+                                {player.nick}
+                                <span className="text-slate-500 text-sm font-normal">#{player.player_tag}</span>
+                              </button>
                             </td>
                             <td className="p-4 text-center text-slate-300">{player.partidas}</td>
                             <td className="p-4 text-center text-emerald-400 font-semibold">{player.vitorias}</td>

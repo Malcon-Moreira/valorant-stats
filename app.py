@@ -46,7 +46,17 @@ def listar_partidas():
         update_database(df_new)
 
     partidas = get_historico_partidas(user['id_player'])
-    return jsonify(partidas)
+    profile = get_player_profile(user['id_player'])
+    return jsonify({"profile": profile, "matches": partidas})
+
+@app.route('/api/player/<int:id_player>', methods=['GET'])
+@jwt_required()
+def ver_perfil_jogador(id_player):
+    profile = get_player_profile(id_player)
+    if not profile:
+        return jsonify({"msg": "Jogador não encontrado"}), 404
+    partidas = get_historico_partidas(id_player)
+    return jsonify({"profile": profile, "matches": partidas})
 
 @app.route('/api/leaderboard', methods=['GET'])
 @jwt_required()
