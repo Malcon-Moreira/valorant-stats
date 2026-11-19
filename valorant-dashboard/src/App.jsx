@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, HashRouter } from 'react-router-dom';
 import Auth from './pages/Auth';
 
 import {
@@ -18,7 +18,7 @@ const PrivateRoute = ({ children }) => {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         <Route path="/" element={<Auth />} />
         <Route path="/dashboard" element={
@@ -27,7 +27,7 @@ export default function App() {
           </PrivateRoute>
         } />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 
