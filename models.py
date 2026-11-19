@@ -153,15 +153,17 @@ def get_all_players():
 def update_database(new_df):
     if new_df.empty: return
     new_df['headshot_percent'] = new_df['headshot_percent'].round(2)
+    id_player = int(new_df['id_player'].iloc[0])
+
     try:
-        ids_existentes = pd.read_sql("SELECT match_id FROM stats", engine)['match_id'].tolist()
+        query = f"SELECT match_id FROM stats WHERE id_player = {id_player}"
+        ids_existentes = pd.read_sql(query, engine)['match_id'].tolist()
         df_para_salvar = new_df[~new_df['match_id'].isin(ids_existentes)]
     except Exception:
         df_para_salvar = new_df
 
     if df_para_salvar.empty: return
 
-    # Adicionámos 'result' e 'map' à lista de colunas permitidas
     colunas_db = ['id_player', 'date', 'week', 'agent', 'kills', 'deaths', 'score', 'headshot_percent', 'class', 'match_id', 'result', 'map']
     df_final = df_para_salvar[colunas_db].copy()
     try:
@@ -200,9 +202,9 @@ def get_leaderboard():
 
         # Fórmula de Rating (balanço de todas as estatísticas para MVP e Pior da Semana)
         df['rating'] = (
-            (df['kd'] * 35) +
-            (df['score_medio'] * 0.15) +
-            (df['win_rate'] * 0.25) +
+            (df['kd'] * 30) +
+            (df['score_medio'] * 0.25) +
+            (df['win_rate'] * 0.20) +
             (df['hs_medio'] * 0.5) +
             (df['media_kills'] * 1.0)
         ).round(1)

@@ -3,7 +3,7 @@ from flask import Flask, jsonify, request
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from models import *
 from flask_cors import CORS
-import json
+import json, time
 
 app = Flask(__name__)
 app.config["JWT_SECRET_KEY"] = os.getenv('CHAVE_API')
@@ -53,9 +53,9 @@ def listar_partidas():
 def listar_leaderboard():
     ranking = get_leaderboard()
     return jsonify(ranking)
+
 @app.route('/api/cron/update-all', methods=['GET', 'POST'])
 def cron_update_all():
-    # Proteção: Verifica se quem chamou tem a senha do Cron
     cron_token = request.headers.get('Authorization')
     senha_cron = os.getenv('CRON_SECRET')
 
@@ -64,20 +64,43 @@ def cron_update_all():
 
     jogadores = get_all_players()
     sucessos = 0
+    relatorio = []
 
     for jogador in jogadores:
+        nick = jogador['nick'].strip()
+        tag = jogador['tag'].strip().lstrip('#')  # Remove '#' caso alguém tenha cadastrado com ele
+
         try:
-            raw_matches = fetch_latest_matches(jogador['nick'], jogador['tag'])
-            if raw_matches:
-                df_new = process_matches(raw_matches, jogador['nick'], jogador['tag'], jogador['id_player'])
+            raw_matches = fetch_latest_matches(nick, tag)
+            if not raw_matches:
+                relatorio.append({
+                    "jogador": f"{nick}#{tag}",
+                    "status": "ignorado",
+                    "motivo": "API não retornou partidas (verifique nick/tag, região ou se jogou competitivo)"
+                })
+            else:
+                df_new = process_matches(raw_matches, nick, tag, jogador['id_player'])
                 update_database(df_new)
                 sucessos += 1
+                relatorio.append({
+                    "jogador": f"{nick}#{tag}",
+                    "status": "atualizado",
+                    "partidas_7_dias": len(df_new)
+                })
         except Exception as e:
-            print(f"Erro ao atualizar {jogador['nick']}#{jogador['tag']}: {e}")
+            print(f"Erro ao atualizar {nick}#{tag}: {e}")
+            relatorio.append({
+                "jogador": f"{nick}#{tag}",
+                "status": "erro",
+                "motivo": str(e)
+            })
+
+        time.sleep(1.5)  # Evita erro 429 (Too Many Requests) na API do HenrikDev
 
     return jsonify({
         "status": "sucesso",
-        "msg": f"Rotina finalizada. {sucessos} de {len(jogadores)} jogadores atualizados."
+        "msg": f"Rotina finalizada. {sucessos} de {len(jogadores)} jogadores atualizados.",
+        "detalhes": relatorio
     }), 200
 
 if __name__ == '__main__':
