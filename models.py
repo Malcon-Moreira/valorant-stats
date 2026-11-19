@@ -170,6 +170,7 @@ def update_database(new_df):
         df_final.to_sql('stats', engine, if_exists='append', index=False)
     except Exception as e:
         print(f"Erro ao salvar: {e}")
+        raise e
 
 def get_leaderboard():
     try:
