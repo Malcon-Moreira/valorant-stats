@@ -1,10 +1,10 @@
 import React, { useMemo, useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, HashRouter } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Auth from './pages/Auth';
-
 import {
   Crosshair, Target, Trophy, Swords,
-  Calendar, User, ChevronUp, Map, Activity
+  Calendar, User, Map, Activity, Users, Filter,
+  Crown, Skull, ThumbsDown
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -33,34 +33,40 @@ export default function App() {
 
 function ValorantDashboard() {
   const [matches, setMatches] = useState([]);
+  const [leaderboard, setLeaderboard] = useState({ highlights: null, ranking: [] });
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('personal');
+  const [roleFilter, setRoleFilter] = useState('All');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
 
-    console.log("Token lido do localStorage:", token);
-
     if (!token || token === 'undefined' || token === 'null') {
-        console.error("O token está vazio ou corrompido. Abortando requisição.");
-        setLoading(false);
-        return;
+      console.error("O token está vazio ou corrompido. Abortando requisição.");
+      setLoading(false);
+      return;
     }
 
-    fetch('https://valorant-backend-76hl.onrender.com/api/matches', {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
-    })
-      .then(async response => {
-        if (!response.ok) {
-          const errorData = await response.json();
-          console.error("O Flask recusou a requisição. Motivo:", errorData);
+    const headers = { 'Authorization': `Bearer ${token}` };
+    const baseUrl = 'https://valorant-backend-76hl.onrender.com';
+
+    Promise.all([
+      fetch(`${baseUrl}/api/matches`, { headers }),
+      fetch(`${baseUrl}/api/leaderboard`, { headers })
+    ])
+      .then(async ([resMatches, resLeaderboard]) => {
+        if (!resMatches.ok) {
+          const errorData = await resMatches.json();
+          console.error("Erro em /api/matches:", errorData);
           throw new Error("Falha na autorização");
         }
-        return response.json();
-      })
-      .then(data => {
-        setMatches(data);
+        const dataMatches = await resMatches.json();
+        setMatches(dataMatches);
+
+        if (resLeaderboard.ok) {
+          const dataLeaderboard = await resLeaderboard.json();
+          setLeaderboard(dataLeaderboard);
+        }
         setLoading(false);
       })
       .catch(error => {
@@ -69,12 +75,17 @@ function ValorantDashboard() {
       });
   }, []);
 
+  const filteredMatches = useMemo(() => {
+    if (roleFilter === 'All') return matches;
+    return matches.filter(m => m.class === roleFilter);
+  }, [matches, roleFilter]);
+
   const stats = useMemo(() => {
-    if (!matches.length) return { kd: 0, hs: 0, score: 0 };
+    if (!filteredMatches.length) return { kd: 0, hs: 0, score: 0 };
 
     let totalKills = 0, totalDeaths = 0, totalScore = 0, totalHs = 0;
 
-    matches.forEach(m => {
+    filteredMatches.forEach(m => {
       totalKills += m.kills;
       totalDeaths += m.deaths;
       totalScore += m.score;
@@ -83,40 +94,40 @@ function ValorantDashboard() {
 
     return {
       kd: totalDeaths === 0 ? totalKills : (totalKills / totalDeaths).toFixed(2),
-      hs: (totalHs / matches.length).toFixed(1),
-      score: Math.round(totalScore / matches.length)
+      hs: (totalHs / filteredMatches.length).toFixed(1),
+      score: Math.round(totalScore / filteredMatches.length)
     };
-  }, [matches]);
+  }, [filteredMatches]);
 
   const chartData = useMemo(() => {
-    return [...matches].reverse().map((match, index) => ({
+    return [...filteredMatches].reverse().map((match, index) => ({
       name: `P${index + 1} (${match.agent})`,
       Kills: match.kills,
       Deaths: match.deaths,
     }));
-  }, [matches]);
+  }, [filteredMatches]);
 
   const extraStats = useMemo(() => {
-    if (!matches.length) return { winRate: 0, favoriteMap: 'N/A' };
+    if (!filteredMatches.length) return { winRate: 0, favoriteMap: 'N/A' };
 
-    const vitorias = matches.filter(p => p.result === 'Vitória').length;
-    const empates = matches.filter(p => p.result === 'Empate').length;
-    const totalPartidasValidas = matches.length - empates;
+    const vitorias = filteredMatches.filter(p => p.result === 'Vitória').length;
+    const empates = filteredMatches.filter(p => p.result === 'Empate').length;
+    const totalPartidasValidas = filteredMatches.length - empates;
 
     const winRate = totalPartidasValidas > 0
       ? ((vitorias / totalPartidasValidas) * 100).toFixed(1)
       : 0;
 
-    const mapas = matches.filter(p => p.map).map(p => p.map);
+    const mapas = filteredMatches.filter(p => p.map).map(p => p.map);
     const mapaFavorito = mapas.length > 0
-      ? mapas.sort((a,b) => mapas.filter(v => v===a).length - mapas.filter(v => v===b).length).pop()
+      ? mapas.sort((a, b) => mapas.filter(v => v === a).length - mapas.filter(v => v === b).length).pop()
       : 'N/A';
 
     return { winRate, favoriteMap: mapaFavorito };
-  }, [matches]);
+  }, [filteredMatches]);
 
   const getClassColor = (agentClass) => {
-    switch(agentClass) {
+    switch (agentClass) {
       case 'Duelist': return 'text-orange-400 bg-orange-400/10 border-orange-400/20';
       case 'Sentinel': return 'text-slate-300 bg-slate-300/10 border-slate-300/20';
       case 'Controller': return 'text-purple-400 bg-purple-400/10 border-purple-400/20';
@@ -146,152 +157,360 @@ function ValorantDashboard() {
                 Valo<span className="text-[#ff4655]">Stats</span>
               </span>
             </div>
-            <button
-              onClick={() => {
-                localStorage.removeItem('token');
-                window.location.href = '/';
-              }}
-              className="text-slate-400 hover:text-white transition-colors"
-            >
-              Sair
-            </button>
+
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setActiveTab('personal')}
+                className={`px-4 py-2 rounded-md font-semibold transition-colors ${
+                  activeTab === 'personal' ? 'bg-[#ff4655] text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Meu Perfil
+              </button>
+              <button
+                onClick={() => setActiveTab('global')}
+                className={`px-4 py-2 rounded-md font-semibold transition-colors ${
+                  activeTab === 'global' ? 'bg-[#ff4655] text-white' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Leaderboard
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.removeItem('token');
+                  window.location.href = '/';
+                }}
+                className="text-slate-400 hover:text-white transition-colors ml-2"
+              >
+                Sair
+              </button>
+            </div>
           </div>
         </div>
       </nav>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-white tracking-wide uppercase">Seu Desempenho</h1>
-          <p className="text-slate-400 mt-1">Análise das suas estatísticas recentes puxadas do Neon.</p>
-        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
-            <div className="flex justify-between items-start">
+        {/* ABA 1: MEU PERFIL */}
+        {activeTab === 'personal' && (
+          <>
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
               <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">K/D Médio</p>
-                <h3 className="text-4xl font-bold text-white mt-2">{stats.kd}</h3>
+                <h1 className="text-3xl font-bold text-white tracking-wide uppercase">Seu Desempenho</h1>
+                <p className="text-slate-400 mt-1">Análise das suas estatísticas recentes puxadas do Neon.</p>
               </div>
-              <Crosshair className="w-6 h-6 text-[#ff4655]" />
-            </div>
-          </div>
 
-          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot</p>
-                <h3 className="text-4xl font-bold text-white mt-2">{stats.hs}%</h3>
-              </div>
-              <Target className="w-6 h-6 text-[#ff4655]" />
-            </div>
-          </div>
-
-          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Score</p>
-                <h3 className="text-4xl font-bold text-white mt-2">{stats.score}</h3>
-              </div>
-              <Trophy className="w-6 h-6 text-[#ff4655]" />
-            </div>
-          </div>
-
-          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Win Rate</p>
-                <h3 className="text-4xl font-bold text-white mt-2">{extraStats.winRate}%</h3>
-              </div>
-              <Activity className="w-6 h-6 text-[#ff4655]" />
-            </div>
-          </div>
-
-          <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Melhor Mapa</p>
-                <h3 className="text-xl font-bold text-white mt-2 truncate max-w-[120px]" title={extraStats.favoriteMap}>
-                  {extraStats.favoriteMap}
-                </h3>
+              <div className="flex items-center gap-2 bg-[#1f2326] p-1.5 rounded-lg border border-slate-800 w-fit">
+                <Filter className="w-4 h-4 text-slate-400 ml-2" />
+                <select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value)}
+                  className="bg-[#1f2326] text-sm font-semibold text-slate-300 outline-none p-1 cursor-pointer"
+                >
+                  <option value="All">Todas as Classes</option>
+                  <option value="Duelist">Duelistas</option>
+                  <option value="Initiator">Iniciadores</option>
+                  <option value="Controller">Controladores</option>
+                  <option value="Sentinel">Sentinelas</option>
+                </select>
               </div>
             </div>
-          </div>
-        </div>
 
-        <div className="bg-[#1f2326] rounded-xl shadow-lg p-6 border border-slate-800">
-          <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-            <Calendar className="w-5 h-5 text-[#ff4655]" />
-            Kills vs Mortes (Últimas Partidas)
-          </h2>
-          <div className="h-80 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#2d3748" vertical={false} />
-                <XAxis dataKey="name" stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: '#1a202c', borderColor: '#2d3748', borderRadius: '8px', color: '#fff' }} />
-                <Legend />
-                <Bar dataKey="Kills" fill="#ff4655" radius={[4, 4, 0, 0]} maxBarSize={50} />
-                <Bar dataKey="Deaths" fill="#4a5568" radius={[4, 4, 0, 0]} maxBarSize={50} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">K/D Médio</p>
+                    <h3 className="text-4xl font-bold text-white mt-2">{stats.kd}</h3>
+                  </div>
+                  <Crosshair className="w-6 h-6 text-[#ff4655]" />
+                </div>
+              </div>
 
-        <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
-          <div className="p-6 border-b border-slate-800">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <User className="w-5 h-5 text-[#ff4655]" />
-              Histórico de Partidas
-            </h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-[#161a1d] text-slate-400 text-sm uppercase tracking-wider">
-                  <th className="p-4 font-medium">Data</th>
-                  <th className="p-4 font-medium">Agente</th>
-                  <th className="p-4 font-medium text-center">K/D/A</th>
-                  <th className="p-4 font-medium text-center">K/D Ratio</th>
-                  <th className="p-4 font-medium text-center">Headshot %</th>
-                  <th className="p-4 font-medium text-right">Score</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50 text-sm">
-                {matches.map((match) => {
-                  const kdRatio = (match.kills / match.deaths).toFixed(2);
-                  const isPositive = match.kills >= match.deaths;
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot</p>
+                    <h3 className="text-4xl font-bold text-white mt-2">{stats.hs}%</h3>
+                  </div>
+                  <Target className="w-6 h-6 text-[#ff4655]" />
+                </div>
+              </div>
 
-                  return (
-                    <tr key={match.match_id} className="hover:bg-slate-800/30 transition-colors">
-                      <td className="p-4 whitespace-nowrap">
-                        <span className="text-slate-300 block">{match.date.split(' ')[0]}</span>
-                        <span className="text-slate-500 text-xs">{match.date.split(' ')[1]}</span>
-                      </td>
-                      <td className="p-4">
-                        <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${getClassColor(match.class)}`}>
-                          {match.agent}
-                        </span>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className="font-bold text-white">{match.kills}</span>
-                        <span className="text-slate-500 mx-1">/</span>
-                        <span className="font-bold text-slate-400">{match.deaths}</span>
-                      </td>
-                      <td className="p-4 text-center">
-                        <span className={`font-bold ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {kdRatio}
-                        </span>
-                      </td>
-                      <td className="p-4 text-center text-slate-300">{match.headshot_percent}%</td>
-                      <td className="p-4 text-right font-bold text-white">{match.score}</td>
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Score</p>
+                    <h3 className="text-4xl font-bold text-white mt-2">{stats.score}</h3>
+                  </div>
+                  <Trophy className="w-6 h-6 text-[#ff4655]" />
+                </div>
+              </div>
+
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Win Rate</p>
+                    <h3 className="text-4xl font-bold text-white mt-2">{extraStats.winRate}%</h3>
+                  </div>
+                  <Activity className="w-6 h-6 text-[#ff4655]" />
+                </div>
+              </div>
+
+              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6 group">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Melhor Mapa</p>
+                    <h3 className="text-xl font-bold text-white mt-2 truncate max-w-[120px]" title={extraStats.favoriteMap}>
+                      {extraStats.favoriteMap}
+                    </h3>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#1f2326] rounded-xl shadow-lg p-6 border border-slate-800">
+              <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-[#ff4655]" />
+                Kills vs Mortes (Últimas Partidas)
+              </h2>
+              <div className="h-80 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#2d3748" vertical={false} />
+                    <XAxis dataKey="name" stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
+                    <YAxis stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
+                    <Tooltip contentStyle={{ backgroundColor: '#1a202c', borderColor: '#2d3748', borderRadius: '8px', color: '#fff' }} />
+                    <Legend />
+                    <Bar dataKey="Kills" fill="#ff4655" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                    <Bar dataKey="Deaths" fill="#4a5568" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
+              <div className="p-6 border-b border-slate-800">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <User className="w-5 h-5 text-[#ff4655]" />
+                  Histórico de Partidas
+                </h2>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-[#161a1d] text-slate-400 text-sm uppercase tracking-wider">
+                      <th className="p-4 font-medium">Data</th>
+                      <th className="p-4 font-medium">Mapa</th>
+                      <th className="p-4 font-medium">Agente</th>
+                      <th className="p-4 font-medium text-center">Resultado</th>
+                      <th className="p-4 font-medium text-center">K/D</th>
+                      <th className="p-4 font-medium text-center">K/D Ratio</th>
+                      <th className="p-4 font-medium text-center">Headshot %</th>
+                      <th className="p-4 font-medium text-right">Score</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50 text-sm">
+                    {filteredMatches.map((match) => {
+                      const kdRatio = match.deaths === 0 ? match.kills.toFixed(2) : (match.kills / match.deaths).toFixed(2);
+                      const isPositive = match.kills >= match.deaths;
+
+                      return (
+                        <tr key={match.match_id} className="hover:bg-slate-800/30 transition-colors">
+                          <td className="p-4 whitespace-nowrap">
+                            <span className="text-slate-300 block">{match.date.split(' ')[0]}</span>
+                            <span className="text-slate-500 text-xs">{match.date.split(' ')[1]}</span>
+                          </td>
+                          <td className="p-4 text-slate-300 font-medium">{match.map || '-'}</td>
+                          <td className="p-4">
+                            <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${getClassColor(match.class)}`}>
+                              {match.agent}
+                            </span>
+                          </td>
+                          <td className="p-4 text-center">
+                            <span className={`font-bold ${
+                              match.result === 'Vitória' ? 'text-emerald-400' :
+                              match.result === 'Derrota' ? 'text-red-400' : 'text-slate-400'
+                            }`}>
+                              {match.result || '-'}
+                            </span>
+                          </td>
+                          <td className="p-4 text-center">
+                            <span className="font-bold text-white">{match.kills}</span>
+                            <span className="text-slate-500 mx-1">/</span>
+                            <span className="font-bold text-slate-400">{match.deaths}</span>
+                          </td>
+                          <td className="p-4 text-center">
+                            <span className={`font-bold ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {kdRatio}
+                            </span>
+                          </td>
+                          <td className="p-4 text-center text-slate-300">{match.headshot_percent}%</td>
+                          <td className="p-4 text-right font-bold text-white">{match.score}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ABA 2: LEADERBOARD SEMANAL */}
+        {activeTab === 'global' && (
+          <div className="space-y-8">
+            <div>
+              <h1 className="text-3xl font-bold text-white tracking-wide uppercase flex items-center gap-3">
+                <Users className="text-[#ff4655]" /> Placar de Líderes Semanal
+              </h1>
+              <p className="text-slate-400 mt-1">Destaques e classificação geral dos últimos 7 dias.</p>
+            </div>
+
+            {!leaderboard.highlights ? (
+              <div className="bg-[#1f2326] rounded-xl p-8 border border-slate-800 text-center text-slate-400">
+                Nenhuma partida registrada nesta semana ainda.
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  <div className="bg-[#1f2326] border-t-4 border-t-yellow-400 rounded-b-xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-yellow-400 text-xs font-bold uppercase tracking-wider">MVP da Semana</p>
+                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                          {leaderboard.highlights.mvp.nick}
+                          <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.mvp.player_tag}</span>
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-2">
+                          Rating: <span className="text-white font-bold">{leaderboard.highlights.mvp.rating}</span> • K/D: {leaderboard.highlights.mvp.kd}
+                        </p>
+                      </div>
+                      <Crown className="w-7 h-7 text-yellow-400 shrink-0" />
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1f2326] border-t-4 border-t-red-600 rounded-b-xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-red-500 text-xs font-bold uppercase tracking-wider">Pior da Semana</p>
+                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                          {leaderboard.highlights.worst.nick}
+                          <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.worst.player_tag}</span>
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-2">
+                          Rating: <span className="text-white font-bold">{leaderboard.highlights.worst.rating}</span> • K/D: {leaderboard.highlights.worst.kd}
+                        </p>
+                      </div>
+                      <ThumbsDown className="w-7 h-7 text-red-500 shrink-0" />
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-[#ff4655] text-xs font-bold uppercase tracking-wider">Maior Média de Kills</p>
+                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                          {leaderboard.highlights.top_kills.nick}
+                          <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.top_kills.player_tag}</span>
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-2">
+                          <span className="text-white font-bold">{leaderboard.highlights.top_kills.media_kills}</span> kills / partida
+                        </p>
+                      </div>
+                      <Crosshair className="w-7 h-7 text-[#ff4655] shrink-0" />
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1f2326] border-t-4 border-t-slate-400 rounded-b-xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-slate-400 text-xs font-bold uppercase tracking-wider">Quem Mais Morreu</p>
+                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                          {leaderboard.highlights.most_deaths.nick}
+                          <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.most_deaths.player_tag}</span>
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-2">
+                          <span className="text-white font-bold">{leaderboard.highlights.most_deaths.total_deaths}</span> mortes no total
+                        </p>
+                      </div>
+                      <Skull className="w-7 h-7 text-slate-400 shrink-0" />
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1f2326] border-t-4 border-t-purple-400 rounded-b-xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Maior Taxa de HS</p>
+                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                          {leaderboard.highlights.top_hs.nick}
+                          <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.top_hs.player_tag}</span>
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-2">
+                          <span className="text-white font-bold">{leaderboard.highlights.top_hs.hs_medio}%</span> de headshots
+                        </p>
+                      </div>
+                      <Target className="w-7 h-7 text-purple-400 shrink-0" />
+                    </div>
+                  </div>
+
+                  <div className="bg-[#1f2326] border-t-4 border-t-emerald-400 rounded-b-xl p-6 shadow-lg">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="text-emerald-400 text-xs font-bold uppercase tracking-wider">Quem Mais Venceu</p>
+                        <h3 className="text-2xl font-bold text-white mt-1 truncate">
+                          {leaderboard.highlights.most_wins.nick}
+                          <span className="text-slate-500 text-sm font-normal">#{leaderboard.highlights.most_wins.player_tag}</span>
+                        </h3>
+                        <p className="text-slate-400 text-sm mt-2">
+                          <span className="text-white font-bold">{leaderboard.highlights.most_wins.vitorias}</span> vitórias ({leaderboard.highlights.most_wins.win_rate}%)
+                        </p>
+                      </div>
+                      <Trophy className="w-7 h-7 text-emerald-400 shrink-0" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-[#161a1d] text-slate-400 text-sm uppercase tracking-wider">
+                          <th className="p-4 font-medium w-16 text-center">Rank</th>
+                          <th className="p-4 font-medium">Jogador</th>
+                          <th className="p-4 font-medium text-center">Partidas</th>
+                          <th className="p-4 font-medium text-center">Vitórias</th>
+                          <th className="p-4 font-medium text-center">K/D</th>
+                          <th className="p-4 font-medium text-center">HS%</th>
+                          <th className="p-4 font-medium text-right">Rating</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/50">
+                        {leaderboard.ranking.map((player, index) => (
+                          <tr key={index} className="hover:bg-slate-800/30 transition-colors">
+                            <td className="p-4 text-center">
+                              <span className={`text-lg font-bold ${index === 0 ? 'text-yellow-400' : index === 1 ? 'text-slate-300' : index === 2 ? 'text-amber-600' : 'text-slate-500'}`}>
+                                #{index + 1}
+                              </span>
+                            </td>
+                            <td className="p-4 font-bold text-white">
+                              {player.nick}<span className="text-slate-500 text-sm font-normal">#{player.player_tag}</span>
+                            </td>
+                            <td className="p-4 text-center text-slate-300">{player.partidas}</td>
+                            <td className="p-4 text-center text-emerald-400 font-semibold">{player.vitorias}</td>
+                            <td className="p-4 text-center text-white font-semibold">{player.kd}</td>
+                            <td className="p-4 text-center text-slate-300">{player.hs_medio}%</td>
+                            <td className="p-4 text-right font-bold text-[#ff4655] text-lg">{player.rating}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-        </div>
+        )}
       </main>
     </div>
   );

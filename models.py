@@ -168,3 +168,62 @@ def update_database(new_df):
         df_final.to_sql('stats', engine, if_exists='append', index=False)
     except Exception as e:
         print(f"Erro ao salvar: {e}")
+
+def get_leaderboard():
+    try:
+        query = """
+            SELECT p.nick, p.player_tag,
+                   COUNT(s.match_id) as partidas,
+                   SUM(s.kills) as total_kills,
+                   AVG(s.kills) as media_kills,
+                   SUM(s.deaths) as total_deaths,
+                   AVG(s.score) as score_medio,
+                   AVG(s.headshot_percent) as hs_medio,
+                   SUM(CASE WHEN s.result = 'Vitória' THEN 1 ELSE 0 END) as vitorias
+            FROM player p
+            JOIN stats s ON p.id_player = s.id_player
+            WHERE CAST(s.date AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY p.id_player, p.nick, p.player_tag
+        """
+        df = pd.read_sql(query, engine)
+        if df.empty:
+            return {"highlights": None, "ranking": []}
+
+        df['kd'] = df.apply(
+            lambda r: round(r['total_kills'] / r['total_deaths'], 2) if r['total_deaths'] > 0 else float(r['total_kills']),
+            axis=1
+        )
+        df['media_kills'] = df['media_kills'].round(1)
+        df['score_medio'] = df['score_medio'].round(0).astype(int)
+        df['hs_medio'] = df['hs_medio'].round(1)
+        df['win_rate'] = ((df['vitorias'] / df['partidas']) * 100).round(1)
+
+        # Fórmula de Rating (balanço de todas as estatísticas para MVP e Pior da Semana)
+        df['rating'] = (
+            (df['kd'] * 35) +
+            (df['score_medio'] * 0.15) +
+            (df['win_rate'] * 0.25) +
+            (df['hs_medio'] * 0.5) +
+            (df['media_kills'] * 1.0)
+        ).round(1)
+
+        # Ordena do maior para o menor Rating
+        df = df.sort_values(by='rating', ascending=False)
+
+        # Extrai os 6 destaques da semana
+        highlights = {
+            "mvp": df.loc[df['rating'].idxmax()].to_dict(),
+            "worst": df.loc[df['rating'].idxmin()].to_dict(),
+            "top_kills": df.loc[df['media_kills'].idxmax()].to_dict(),
+            "most_deaths": df.loc[df['total_deaths'].idxmax()].to_dict(),
+            "top_hs": df.loc[df['hs_medio'].idxmax()].to_dict(),
+            "most_wins": df.loc[df['vitorias'].idxmax()].to_dict(),
+        }
+
+        return {
+            "highlights": highlights,
+            "ranking": df.to_dict(orient='records')
+        }
+    except Exception as e:
+        print(f"Erro ao gerar leaderboard: {e}")
+        return {"highlights": None, "ranking": []}
