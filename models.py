@@ -270,19 +270,17 @@ def get_leaderboard():
         df['hs_medio'] = df['hs_medio'].round(1)
         df['win_rate'] = ((df['vitorias'] / df['partidas']) * 100).round(1)
 
-        # Fórmula de Rating (balanço de todas as estatísticas para MVP e Pior da Semana)
+        # 1. Rating Geral (priorizando K/D, Score e Partidas)
         df['rating'] = (
-            (df['kd'] * 30) +
-            (df['score_medio'] * 0.25) +
-            (df['win_rate'] * 0.20) +
-            (df['hs_medio'] * 0.5) +
-            (df['media_kills'] * 1.0)
+            (df['kd'] * 45) +
+            (df['score_medio'] * 0.020) +
+            (df['partidas'] * 1.5) +
+            (df['hs_medio'] * 0.2) +
+            (df['media_kills'] * 0.8)
         ).round(1)
 
-        # Ordena do maior para o menor Rating
         df = df.sort_values(by='rating', ascending=False)
 
-        # Extrai os 6 destaques da semana
         highlights = {
             "mvp": df.loc[df['rating'].idxmax()].to_dict(),
             "worst": df.loc[df['rating'].idxmin()].to_dict(),
@@ -297,6 +295,7 @@ def get_leaderboard():
             SELECT p.id_player, p.nick, p.player_tag, s.class,
                    COUNT(s.match_id) as partidas,
                    SUM(s.kills) as total_kills,
+                   AVG(s.kills) as media_kills,
                    SUM(s.deaths) as total_deaths,
                    AVG(s.score) as score_medio,
                    AVG(s.headshot_percent) as hs_medio,
@@ -315,12 +314,16 @@ def get_leaderboard():
                 lambda r: round(r['total_kills'] / r['total_deaths'], 2) if r['total_deaths'] > 0 else float(r['total_kills']),
                 axis=1
             )
+            df_class['media_kills'] = df_class['media_kills'].round(1)
             df_class['win_rate'] = ((df_class['vitorias'] / df_class['partidas']) * 100).round(1)
+
+            # 2. Rating por Classe (usando df_class)
             df_class['rating'] = (
-                (df_class['kd'] * 30) +
-                (df_class['score_medio'] * 0.25) +
-                (df_class['win_rate'] * 0.20) +
-                (df_class['hs_medio'] * 0.5)
+                (df_class['kd'] * 45) +
+                (df_class['score_medio'] * 0.020) +
+                (df_class['partidas'] * 1.5) +
+                (df_class['hs_medio'] * 0.2) +
+                (df_class['media_kills'] * 0.8)
             ).round(1)
 
             for role in ['Duelist', 'Initiator', 'Controller', 'Sentinel']:
