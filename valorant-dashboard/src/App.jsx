@@ -571,7 +571,7 @@ function ValorantDashboard() {
                   <div className="bg-[#1f2326] border-t-4 border-t-purple-400 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
                       <div className="min-w-0">
-                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Quem gosta de uma cabeçaS</p>
+                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Quem gosta de uma cabeça</p>
                         <button
                           onClick={() => handleViewPlayer(leaderboard.highlights.top_hs.id_player)}
                           className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
