@@ -321,7 +321,7 @@ def get_leaderboard():
             df_class['rating'] = (
                 (df_class['kd'] * 45) +
                 (df_class['score_medio'] * 0.020) +
-                (df_class['partidas'] * 1.5) +
+                (df_class['partidas'] * 2) +
                 (df_class['hs_medio'] * 0.2) +
                 (df_class['media_kills'] * 0.8)
             ).round(1)
