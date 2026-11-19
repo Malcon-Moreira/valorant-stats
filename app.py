@@ -48,7 +48,11 @@ def listar_partidas():
     partidas = get_historico_partidas(user['id_player'])
     return jsonify(partidas)
 
-
+@app.route('/api/leaderboard', methods=['GET'])
+@jwt_required()
+def listar_leaderboard():
+    ranking = get_leaderboard()
+    return jsonify(ranking)
 @app.route('/api/cron/update-all', methods=['GET', 'POST'])
 def cron_update_all():
     # Proteção: Verifica se quem chamou tem a senha do Cron
