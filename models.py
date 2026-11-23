@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 import urllib.parse
+import io
+from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 
@@ -390,3 +392,92 @@ def get_leaderboard(week_start=None):
             "best_by_class": {},
             "ranking": []
         }
+
+
+def _get_font(size, bold=False):
+    caminhos = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "arialbd.ttf" if bold else "arial.ttf"
+    ]
+    for caminho in caminhos:
+        try:
+            return ImageFont.truetype(caminho, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def gerar_imagem_leaderboard(dados, periodo_fmt):
+    ranking = dados.get('ranking', [])
+    hl = dados.get('highlights', {})
+
+    largura = 900
+    altura_linha = 56
+    altura = 340 + (len(ranking) * altura_linha)
+
+    img = Image.new('RGB', (largura, altura), '#0f1923')
+    draw = ImageDraw.Draw(img)
+
+    f_titulo = _get_font(34, bold=True)
+    f_sub = _get_font(18)
+    f_card_lbl = _get_font(14, bold=True)
+    f_card_val = _get_font(22, bold=True)
+    f_th = _get_font(15, bold=True)
+    f_td = _get_font(18)
+    f_td_bold = _get_font(18, bold=True)
+
+    # Cabeçalho
+    draw.rectangle([(0, 0), (largura, 100)], fill='#1f2326')
+    draw.rectangle([(0, 96), (largura, 100)], fill='#ff4655')
+    draw.text((40, 22), "VALOSTATS  |  PLACAR SEMANAL", fill='#ffffff', font=f_titulo)
+    draw.text((40, 66), f"Período: {periodo_fmt} (Seg 00:00 - Dom 23:59)", fill='#94a3b8', font=f_sub)
+
+    # Cards de Destaque (MVP e Pior da Semana)
+    mvp = hl.get('mvp')
+    worst = hl.get('worst')
+
+    if mvp:
+        draw.rounded_rectangle([(40, 125), (435, 220)], radius=10, fill='#1f2326', outline='#facc15', width=2)
+        draw.text((60, 140), "MVP DA SEMANA", fill='#facc15', font=f_card_lbl)
+        draw.text((60, 162), f"{mvp['nick']}#{mvp['player_tag']}", fill='#ffffff', font=f_card_val)
+        draw.text((60, 192), f"Rating: {mvp['rating']}  •  K/D: {mvp['kd']}", fill='#94a3b8', font=f_card_lbl)
+
+    if worst:
+        draw.rounded_rectangle([(465, 125), (860, 220)], radius=10, fill='#1f2326', outline='#ef4444', width=2)
+        draw.text((485, 140), "LIXOSO DA SEMANA", fill='#ef4444', font=f_card_lbl)
+        draw.text((485, 162), f"{worst['nick']}#{worst['player_tag']}", fill='#ffffff', font=f_card_val)
+        draw.text((485, 192), f"Rating: {worst['rating']}  •  K/D: {worst['kd']}", fill='#94a3b8', font=f_card_lbl)
+
+    # Cabeçalho da Tabela
+    y = 250
+    draw.rounded_rectangle([(40, y), (860, y + 44)], radius=8, fill='#161a1d')
+    draw.text((60, y + 13), "RANK", fill='#94a3b8', font=f_th)
+    draw.text((140, y + 13), "JOGADOR", fill='#94a3b8', font=f_th)
+    draw.text((480, y + 13), "JOGOS", fill='#94a3b8', font=f_th)
+    draw.text((575, y + 13), "K/D", fill='#94a3b8', font=f_th)
+    draw.text((665, y + 13), "HS%", fill='#94a3b8', font=f_th)
+    draw.text((760, y + 13), "RATING", fill='#94a3b8', font=f_th)
+
+    # Linhas da Tabela
+    y += 52
+    for idx, p in enumerate(ranking, start=1):
+        bg_row = '#1f2326' if idx % 2 == 1 else '#181c1f'
+        draw.rounded_rectangle([(40, y), (860, y + 48)], radius=6, fill=bg_row)
+
+        cor_rank = '#facc15' if idx == 1 else ('#cbd5e1' if idx == 2 else ('#d97706' if idx == 3 else '#64748b'))
+        draw.text((65, y + 14), f"#{idx}", fill=cor_rank, font=f_td_bold)
+        draw.text((140, y + 14), f"{p['nick']}#{p['player_tag']}"[:24], fill='#ffffff', font=f_td_bold)
+        draw.text((495, y + 14), str(p['partidas']), fill='#cbd5e1', font=f_td)
+        draw.text((575, y + 14), str(p['kd']), fill='#ffffff', font=f_td_bold)
+        draw.text((665, y + 14), f"{p['hs_medio']}%", fill='#cbd5e1', font=f_td)
+        draw.text((765, y + 14), str(p['rating']), fill='#ff4655', font=f_td_bold)
+
+        y += altura_linha
+
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    buffer.seek(0)
+    return buffer

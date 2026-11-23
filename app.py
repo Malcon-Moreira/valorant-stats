@@ -4,6 +4,8 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from models import *
 from flask_cors import CORS
 import json, time
+import requests
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 app.config["JWT_SECRET_KEY"] = os.getenv('CHAVE_API')
@@ -142,6 +144,88 @@ def cron_update_all():
         "detalhes": relatorio
     }), 200
 
+@app.route('/api/cron/weekly-report', methods=['GET', 'POST'])
+def cron_weekly_report():
+    cron_token = request.headers.get('Authorization')
+    senha_cron = os.getenv('CRON_SECRET')
+
+    if not senha_cron or cron_token != f"Bearer {senha_cron}":
+        return jsonify({"erro": "Acesso negado. Token de Cron inválido."}), 401
+
+    # Calcula a segunda-feira da semana que acabou de encerrar
+    segunda_atual = datetime.strptime(get_current_week_start(), '%Y-%m-%d')
+    segunda_passada_dt = segunda_atual - timedelta(days=7)
+    domingo_passado_dt = segunda_atual - timedelta(days=1)
+
+    semana_passada_str = segunda_passada_dt.strftime('%Y-%m-%d')
+    periodo_fmt = f"{segunda_passada_dt.strftime('%d/%m')} a {domingo_passado_dt.strftime('%d/%m')}"
+
+    dados = get_leaderboard(semana_passada_str)
+
+    if not dados.get('highlights') or not dados.get('ranking'):
+        return jsonify({
+            "status": "ignorado",
+            "msg": f"Nenhuma partida registrada na semana {periodo_fmt}."
+        }), 200
+
+    hl = dados['highlights']
+    best_class = dados.get('best_by_class', {})
+    ranking = dados['ranking']
+
+    # Monta a legenda formatada para o WhatsApp
+    linhas = [
+        f"🏆 *RESUMO SEMANAL - VALOSTATS*",
+        f"📅 Período: {periodo_fmt}\n",
+        f"👑 *MVP da Semana:* {hl['mvp']['nick']}#{hl['mvp']['player_tag']} (Rating: {hl['mvp']['rating']} | K/D: {hl['mvp']['kd']})",
+        f"👎 *Lixoso da Semana:* {hl['worst']['nick']}#{hl['worst']['player_tag']} (Rating: {hl['worst']['rating']} | K/D: {hl['worst']['kd']})",
+        f"🔫 *Maior Média de Kills:* {hl['top_kills']['nick']} ({hl['top_kills']['media_kills']} kills/jogo)",
+        f"🎯 *Maior HS%:* {hl['top_hs']['nick']} ({hl['top_hs']['hs_medio']}%)",
+        f"💀 *Quem Mais Morreu:* {hl['most_deaths']['nick']} ({hl['most_deaths']['total_deaths']} mortes)",
+        f"🥇 *Quem Mais Venceu:* {hl['most_wins']['nick']} ({hl['most_wins']['vitorias']} vitórias)\n"
+    ]
+
+    if best_class:
+        linhas.append("🎭 *Melhores por Classe:*")
+        for role in ['Duelist', 'Initiator', 'Controller', 'Sentinel']:
+            if role in best_class:
+                p = best_class[role]
+                linhas.append(f"• *{role}:* {p['nick']} (Rating: {p['rating']})")
+        linhas.append("")
+
+    linhas.append("📊 *Classificação Geral:*")
+    for idx, p in enumerate(ranking, start=1):
+        linhas.append(f"{idx}º *{p['nick']}* — {p['rating']} pts (K/D: {p['kd']} | {p['partidas']} jogos)")
+
+    mensagem = "\n".join(linhas)
+
+    # Gera a imagem do placar em memória
+    img_buffer = gerar_imagem_leaderboard(dados, periodo_fmt)
+
+    # Disparo da imagem + legenda para a Green-API
+    media_url = os.getenv('GREEN_API_MEDIA_URL') or os.getenv('GREEN_API_URL')
+    id_instance = os.getenv('GREEN_API_ID')
+    api_token = os.getenv('GREEN_API_TOKEN')
+    group_id = os.getenv('WHATSAPP_GROUP_ID')
+
+    if not all([media_url, id_instance, api_token, group_id]):
+        return jsonify({"erro": "Variáveis da Green-API não configuradas no Render."}), 500
+
+    url_envio = f"{media_url}/waInstance{id_instance}/sendFileByUpload/{api_token}"
+    data_payload = {
+        "chatId": group_id,
+        "caption": mensagem
+    }
+    files_payload = {
+        "file": ("placar_semanal.png", img_buffer, "image/png")
+    }
+
+    try:
+        res = requests.post(url_envio, data=data_payload, files=files_payload, timeout=20)
+        if res.status_code == 200:
+            return jsonify({"status": "sucesso", "msg": "Imagem e resumo enviados no WhatsApp!", "green_api": res.json()}), 200
+        return jsonify({"status": "erro", "detalhe": res.text}), res.status_code
+    except Exception as e:
+        return jsonify({"status": "erro", "motivo": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
