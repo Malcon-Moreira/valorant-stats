@@ -10,6 +10,7 @@ app.config["JWT_SECRET_KEY"] = os.getenv('CHAVE_API')
 jwt = JWTManager(app)
 CORS(app)
 
+
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json
@@ -40,14 +41,28 @@ def listar_partidas():
     user_string = get_jwt_identity()
     user = json.loads(user_string)
 
-    raw_matches = fetch_latest_matches(user['nick'], user['tag'])
-    if raw_matches:
-        df_new = process_matches(raw_matches, user['nick'], user['tag'], user['id_player'])
-        update_database(df_new)
+    week = request.args.get('week')
+    current_week = get_current_week_start()
 
-    partidas = get_historico_partidas(user['id_player'])
+    # Só busca na API externa se estiver carregando a semana atual
+    if not week or week == current_week:
+        raw_matches = fetch_latest_matches(user['nick'], user['tag'])
+        if raw_matches:
+            df_new = process_matches(raw_matches, user['nick'], user['tag'], user['id_player'])
+            update_database(df_new)
+
+    partidas = get_historico_partidas(user['id_player'], week)
     profile = get_player_profile(user['id_player'])
-    return jsonify({"profile": profile, "matches": partidas})
+    available_weeks = get_available_weeks(user['id_player'])
+
+    return jsonify({
+        "profile": profile,
+        "matches": partidas,
+        "week_start": week or current_week,
+        "current_week": current_week,
+        "available_weeks": available_weeks
+    })
+
 
 @app.route('/api/player/<int:id_player>', methods=['GET'])
 @jwt_required()
@@ -55,14 +70,28 @@ def ver_perfil_jogador(id_player):
     profile = get_player_profile(id_player)
     if not profile:
         return jsonify({"msg": "Jogador não encontrado"}), 404
-    partidas = get_historico_partidas(id_player)
-    return jsonify({"profile": profile, "matches": partidas})
+
+    week = request.args.get('week')
+    current_week = get_current_week_start()
+    partidas = get_historico_partidas(id_player, week)
+    available_weeks = get_available_weeks(id_player)
+
+    return jsonify({
+        "profile": profile,
+        "matches": partidas,
+        "week_start": week or current_week,
+        "current_week": current_week,
+        "available_weeks": available_weeks
+    })
+
 
 @app.route('/api/leaderboard', methods=['GET'])
 @jwt_required()
 def listar_leaderboard():
-    ranking = get_leaderboard()
+    week = request.args.get('week')
+    ranking = get_leaderboard(week)
     return jsonify(ranking)
+
 
 @app.route('/api/cron/update-all', methods=['GET', 'POST'])
 def cron_update_all():
@@ -78,7 +107,7 @@ def cron_update_all():
 
     for jogador in jogadores:
         nick = jogador['nick'].strip()
-        tag = jogador['tag'].strip().lstrip('#')  # Remove '#' caso alguém tenha cadastrado com ele
+        tag = jogador['tag'].strip().lstrip('#')
 
         try:
             raw_matches = fetch_latest_matches(nick, tag)
@@ -86,7 +115,7 @@ def cron_update_all():
                 relatorio.append({
                     "jogador": f"{nick}#{tag}",
                     "status": "ignorado",
-                    "motivo": "API não retornou partidas (verifique nick/tag, região ou se jogou competitivo)"
+                    "motivo": "API não retornou partidas"
                 })
             else:
                 df_new = process_matches(raw_matches, nick, tag, jogador['id_player'])
@@ -95,7 +124,7 @@ def cron_update_all():
                 relatorio.append({
                     "jogador": f"{nick}#{tag}",
                     "status": "atualizado",
-                    "partidas_7_dias": len(df_new)
+                    "partidas_encontradas": len(df_new)
                 })
         except Exception as e:
             print(f"Erro ao atualizar {nick}#{tag}: {e}")
@@ -105,13 +134,14 @@ def cron_update_all():
                 "motivo": str(e)
             })
 
-        time.sleep(1.5)  # Evita erro 429 (Too Many Requests) na API do HenrikDev
+        time.sleep(1.5)
 
     return jsonify({
         "status": "sucesso",
         "msg": f"Rotina finalizada. {sucessos} de {len(jogadores)} jogadores atualizados.",
         "detalhes": relatorio
     }), 200
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

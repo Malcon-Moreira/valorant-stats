@@ -4,7 +4,7 @@ import Auth from './pages/Auth';
 import {
   Crosshair, Target, Trophy, Swords,
   Calendar, User, Map, Activity, Users, Filter,
-  Crown, Skull, ThumbsDown
+  Crown, Skull, ThumbsDown, History
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -14,6 +14,16 @@ import {
 const PrivateRoute = ({ children }) => {
   const token = localStorage.getItem('token');
   return token ? children : <Navigate to="/" />;
+};
+
+// Formata "2026-11-23" para "23/11 a 29/11" (Segunda a Domingo)
+const formatWeekRange = (weekStartStr) => {
+  if (!weekStartStr) return '';
+  const start = new Date(`${weekStartStr}T12:00:00`);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6);
+  const fmt = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${fmt(start)} a ${fmt(end)}`;
 };
 
 export default function App() {
@@ -35,48 +45,66 @@ function ValorantDashboard() {
   const [matches, setMatches] = useState([]);
   const [profile, setProfile] = useState(null);
   const [viewingFriend, setViewingFriend] = useState(false);
+
+  // Controle de semanas do Perfil
+  const [personalSubTab, setPersonalSubTab] = useState('current');
+  const [personalCurrentWeek, setPersonalCurrentWeek] = useState('');
+  const [personalPastWeeks, setPersonalPastWeeks] = useState([]);
+  const [selectedPersonalWeek, setSelectedPersonalWeek] = useState('');
+
+  // Controle de semanas do Leaderboard
   const [leaderboard, setLeaderboard] = useState({
+    week_start: '',
+    current_week: '',
+    available_weeks: [],
     highlights: null,
     best_by_class: {},
     ranking: []
   });
+  const [globalSubTab, setGlobalSubTab] = useState('current');
+  const [selectedGlobalWeek, setSelectedGlobalWeek] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('personal');
   const [roleFilter, setRoleFilter] = useState('All');
 
   const baseUrl = 'https://valorant-backend-76hl.onrender.com';
 
+  const getHeaders = () => ({
+    'Authorization': `Bearer ${localStorage.getItem('token')}`
+  });
+
   const loadMyData = () => {
     const token = localStorage.getItem('token');
-
     if (!token || token === 'undefined' || token === 'null') {
-      console.error("O token está vazio ou corrompido. Abortando requisição.");
       setLoading(false);
       return;
     }
 
     setLoading(true);
-    const headers = { 'Authorization': `Bearer ${token}` };
-
     Promise.all([
-      fetch(`${baseUrl}/api/matches`, { headers }),
-      fetch(`${baseUrl}/api/leaderboard`, { headers })
+      fetch(`${baseUrl}/api/matches`, { headers: getHeaders() }),
+      fetch(`${baseUrl}/api/leaderboard`, { headers: getHeaders() })
     ])
       .then(async ([resMatches, resLeaderboard]) => {
-        if (!resMatches.ok) {
-          const errorData = await resMatches.json();
-          console.error("Erro em /api/matches:", errorData);
-          throw new Error("Falha na autorização");
-        }
+        if (!resMatches.ok) throw new Error("Falha na autorização");
         const dataMatches = await resMatches.json();
+
         setMatches(dataMatches.matches || []);
         setProfile(dataMatches.profile || null);
+        setPersonalCurrentWeek(dataMatches.current_week || '');
+        const pastPersonal = (dataMatches.available_weeks || []).filter(w => w !== dataMatches.current_week);
+        setPersonalPastWeeks(pastPersonal);
+        setPersonalSubTab('current');
+        setSelectedPersonalWeek(pastPersonal[0] || '');
         setViewingFriend(false);
         setRoleFilter('All');
 
         if (resLeaderboard.ok) {
           const dataLeaderboard = await resLeaderboard.json();
           setLeaderboard(dataLeaderboard);
+          const pastGlobal = (dataLeaderboard.available_weeks || []).filter(w => w !== dataLeaderboard.current_week);
+          setSelectedGlobalWeek(pastGlobal[0] || '');
         }
         setLoading(false);
       })
@@ -90,28 +118,89 @@ function ValorantDashboard() {
     loadMyData();
   }, []);
 
-  const handleViewPlayer = async (idPlayer) => {
-    if (!idPlayer) return;
-    const token = localStorage.getItem('token');
+  // Busca partidas do perfil (próprio ou amigo) para uma semana específica
+  const fetchPersonalWeek = async (weekStr, friendId = null) => {
     setLoading(true);
     try {
-      const res = await fetch(`${baseUrl}/api/player/${idPlayer}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const endpoint = friendId
+        ? `${baseUrl}/api/player/${friendId}${weekStr ? `?week=${weekStr}` : ''}`
+        : `${baseUrl}/api/matches${weekStr ? `?week=${weekStr}` : ''}`;
+
+      const res = await fetch(endpoint, { headers: getHeaders() });
       if (res.ok) {
         const data = await res.json();
-        setProfile(data.profile);
         setMatches(data.matches || []);
-        setViewingFriend(true);
+        setProfile(data.profile || null);
+        setPersonalCurrentWeek(data.current_week || '');
+        const past = (data.available_weeks || []).filter(w => w !== data.current_week);
+        setPersonalPastWeeks(past);
         setRoleFilter('All');
-        setActiveTab('personal');
       }
     } catch (error) {
-      console.error("Erro ao carregar perfil do jogador:", error);
+      console.error("Erro ao carregar semana do perfil:", error);
     } finally {
       setLoading(false);
     }
   };
+
+  // Busca leaderboard de uma semana específica
+  const fetchGlobalWeek = async (weekStr) => {
+    setLoading(true);
+    try {
+      const url = `${baseUrl}/api/leaderboard${weekStr ? `?week=${weekStr}` : ''}`;
+      const res = await fetch(url, { headers: getHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        setLeaderboard(data);
+      }
+    } catch (error) {
+      console.error("Erro ao carregar semana do leaderboard:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePersonalSubTabChange = (tab) => {
+    setPersonalSubTab(tab);
+    const friendId = viewingFriend ? profile?.id_player : null;
+    if (tab === 'current') {
+      fetchPersonalWeek(null, friendId);
+    } else if (personalPastWeeks.length > 0) {
+      const targetWeek = selectedPersonalWeek && personalPastWeeks.includes(selectedPersonalWeek)
+        ? selectedPersonalWeek
+        : personalPastWeeks[0];
+      setSelectedPersonalWeek(targetWeek);
+      fetchPersonalWeek(targetWeek, friendId);
+    } else {
+      setMatches([]);
+    }
+  };
+
+  const handleGlobalSubTabChange = (tab) => {
+    setGlobalSubTab(tab);
+    const pastGlobal = (leaderboard.available_weeks || []).filter(w => w !== leaderboard.current_week);
+    if (tab === 'current') {
+      fetchGlobalWeek(null);
+    } else if (pastGlobal.length > 0) {
+      const targetWeek = selectedGlobalWeek && pastGlobal.includes(selectedGlobalWeek)
+        ? selectedGlobalWeek
+        : pastGlobal[0];
+      setSelectedGlobalWeek(targetWeek);
+      fetchGlobalWeek(targetWeek);
+    }
+  };
+
+  const handleViewPlayer = async (idPlayer) => {
+    if (!idPlayer) return;
+    setViewingFriend(true);
+    setPersonalSubTab('current');
+    setActiveTab('personal');
+    await fetchPersonalWeek(null, idPlayer);
+  };
+
+  const globalPastWeeks = useMemo(() => {
+    return (leaderboard.available_weeks || []).filter(w => w !== leaderboard.current_week);
+  }, [leaderboard.available_weeks, leaderboard.current_week]);
 
   const filteredMatches = useMemo(() => {
     if (roleFilter === 'All') return matches;
@@ -162,7 +251,6 @@ function ValorantDashboard() {
     const kd = parseFloat(stats.kd);
     const rr = profile.rr || 0;
 
-    // Estima ganho/perda média de RR ponderada pelo K/D
     const avgWinRR = Math.min(30, Math.max(14, 20 + (kd - 1) * 5));
     const avgLossRR = Math.min(26, Math.max(12, 18 - (kd - 1) * 4));
     const expectedRRPerMatch = (wr * avgWinRR) - ((1 - wr) * avgLossRR);
@@ -225,9 +313,7 @@ function ValorantDashboard() {
             <div className="flex items-center gap-4">
               <button
                 onClick={() => {
-                  if (viewingFriend) {
-                    loadMyData();
-                  }
+                  if (viewingFriend) loadMyData();
                   setActiveTab('personal');
                 }}
                 className={`px-4 py-2 rounded-md font-semibold transition-colors ${
@@ -272,7 +358,7 @@ function ValorantDashboard() {
               </button>
             )}
 
-            {/* Banner do Jogador (Card + Nick + Elo + Projeção) */}
+            {/* Banner do Jogador */}
             {profile && (
               <div className="bg-[#1f2326] rounded-xl border border-slate-800 overflow-hidden shadow-lg flex flex-col md:flex-row items-center justify-between p-6 gap-6">
                 <div className="flex flex-col sm:flex-row items-center gap-5 text-center sm:text-left">
@@ -295,7 +381,7 @@ function ValorantDashboard() {
                   </div>
                 </div>
 
-                {eloProjection && (
+                {eloProjection && personalSubTab === 'current' && (
                   <div className={`px-4 py-3 rounded-lg border text-center md:text-right ${
                     eloProjection.status === 'up'
                       ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
@@ -309,182 +395,298 @@ function ValorantDashboard() {
               </div>
             )}
 
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
-              <div>
-                <h1 className="text-3xl font-bold text-white tracking-wide uppercase">
-                  {viewingFriend ? `Desempenho de ${profile?.nick}` : 'Seu Desempenho'}
-                </h1>
-                <p className="text-slate-400 mt-1">Análise das estatísticas recentes.</p>
-              </div>
-
-              <div className="flex items-center gap-2 bg-[#1f2326] p-1.5 rounded-lg border border-slate-800 w-fit">
-                <Filter className="w-4 h-4 text-slate-400 ml-2" />
-                <select
-                  value={roleFilter}
-                  onChange={(e) => setRoleFilter(e.target.value)}
-                  className="bg-[#1f2326] text-sm font-semibold text-slate-300 outline-none p-1 cursor-pointer"
+            {/* Sub-abas: Semana Atual vs Semanas Anteriores */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handlePersonalSubTabChange('current')}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${
+                    personalSubTab === 'current'
+                      ? 'bg-[#ff4655] text-white'
+                      : 'bg-[#1f2326] text-slate-400 hover:text-white border border-slate-800'
+                  }`}
                 >
-                  <option value="All">Todas as Classes</option>
-                  <option value="Duelist">Duelistas</option>
-                  <option value="Initiator">Iniciadores</option>
-                  <option value="Controller">Controladores</option>
-                  <option value="Sentinel">Sentinelas</option>
+                  <Calendar className="w-4 h-4" />
+                  Semana Atual ({formatWeekRange(personalCurrentWeek)})
+                </button>
+                <button
+                  onClick={() => handlePersonalSubTabChange('past')}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${
+                    personalSubTab === 'past'
+                      ? 'bg-[#ff4655] text-white'
+                      : 'bg-[#1f2326] text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <History className="w-4 h-4" />
+                  Semanas Anteriores
+                </button>
+              </div>
+
+              {personalSubTab === 'past' && personalPastWeeks.length > 0 && (
+                <select
+                  value={selectedPersonalWeek}
+                  onChange={(e) => {
+                    setSelectedPersonalWeek(e.target.value);
+                    fetchPersonalWeek(e.target.value, viewingFriend ? profile?.id_player : null);
+                  }}
+                  className="bg-[#1f2326] border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold text-white outline-none cursor-pointer"
+                >
+                  {personalPastWeeks.map((w, idx) => (
+                    <option key={w} value={w}>
+                      {idx === 0 ? `Última Semana (${formatWeekRange(w)})` : `Semana de ${formatWeekRange(w)}`}
+                    </option>
+                  ))}
                 </select>
-              </div>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">K/D Médio</p>
-                    <h3 className="text-4xl font-bold text-white mt-2">{stats.kd}</h3>
-                  </div>
-                  <Crosshair className="w-6 h-6 text-[#ff4655]" />
-                </div>
+            {personalSubTab === 'past' && personalPastWeeks.length === 0 ? (
+              <div className="bg-[#1f2326] rounded-xl p-8 border border-slate-800 text-center text-slate-400">
+                Nenhuma semana anterior registrada ainda.
               </div>
-
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
-                <div className="flex justify-between items-start">
+            ) : (
+              <>
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
                   <div>
-                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot</p>
-                    <h3 className="text-4xl font-bold text-white mt-2">{stats.hs}%</h3>
+                    <h1 className="text-3xl font-bold text-white tracking-wide uppercase">
+                      {viewingFriend ? `Desempenho de ${profile?.nick}` : 'Seu Desempenho'}
+                    </h1>
+                    <p className="text-slate-400 mt-1">
+                      Período: {formatWeekRange(personalSubTab === 'current' ? personalCurrentWeek : selectedPersonalWeek)} (Seg 00:00 – Dom 23:59)
+                    </p>
                   </div>
-                  <Target className="w-6 h-6 text-[#ff4655]" />
-                </div>
-              </div>
 
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Score</p>
-                    <h3 className="text-4xl font-bold text-white mt-2">{stats.score}</h3>
-                  </div>
-                  <Trophy className="w-6 h-6 text-[#ff4655]" />
-                </div>
-              </div>
-
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Win Rate</p>
-                    <h3 className="text-4xl font-bold text-white mt-2">{extraStats.winRate}%</h3>
-                  </div>
-                  <Activity className="w-6 h-6 text-[#ff4655]" />
-                </div>
-              </div>
-
-              <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Melhor Mapa</p>
-                    <h3 className="text-xl font-bold text-white mt-2 truncate max-w-[120px]" title={extraStats.favoriteMap}>
-                      {extraStats.favoriteMap}
-                    </h3>
+                  <div className="flex items-center gap-2 bg-[#1f2326] p-1.5 rounded-lg border border-slate-800 w-fit">
+                    <Filter className="w-4 h-4 text-slate-400 ml-2" />
+                    <select
+                      value={roleFilter}
+                      onChange={(e) => setRoleFilter(e.target.value)}
+                      className="bg-[#1f2326] text-sm font-semibold text-slate-300 outline-none p-1 cursor-pointer"
+                    >
+                      <option value="All">Todas as Classes</option>
+                      <option value="Duelist">Duelistas</option>
+                      <option value="Initiator">Iniciadores</option>
+                      <option value="Controller">Controladores</option>
+                      <option value="Sentinel">Sentinelas</option>
+                    </select>
                   </div>
                 </div>
-              </div>
-            </div>
 
-            <div className="bg-[#1f2326] rounded-xl shadow-lg p-6 border border-slate-800">
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                <Calendar className="w-5 h-5 text-[#ff4655]" />
-                Kills vs Mortes (Últimas Partidas)
-              </h2>
-              <div className="h-80 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#2d3748" vertical={false} />
-                    <XAxis dataKey="name" stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
-                    <YAxis stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
-                    <Tooltip contentStyle={{ backgroundColor: '#1a202c', borderColor: '#2d3748', borderRadius: '8px', color: '#fff' }} />
-                    <Legend />
-                    <Bar dataKey="Kills" fill="#ff4655" radius={[4, 4, 0, 0]} maxBarSize={50} />
-                    <Bar dataKey="Deaths" fill="#4a5568" radius={[4, 4, 0, 0]} maxBarSize={50} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+                {filteredMatches.length === 0 ? (
+                  <div className="bg-[#1f2326] rounded-xl p-8 border border-slate-800 text-center text-slate-400">
+                    Nenhuma partida registrada nesta semana.
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
+                      <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">K/D Médio</p>
+                            <h3 className="text-4xl font-bold text-white mt-2">{stats.kd}</h3>
+                          </div>
+                          <Crosshair className="w-6 h-6 text-[#ff4655]" />
+                        </div>
+                      </div>
 
-            <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
-              <div className="p-6 border-b border-slate-800">
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                  <User className="w-5 h-5 text-[#ff4655]" />
-                  Histórico de Partidas
-                </h2>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-[#161a1d] text-slate-400 text-sm uppercase tracking-wider">
-                      <th className="p-4 font-medium">Data</th>
-                      <th className="p-4 font-medium">Mapa</th>
-                      <th className="p-4 font-medium">Agente</th>
-                      <th className="p-4 font-medium text-center">Resultado</th>
-                      <th className="p-4 font-medium text-center">K/D</th>
-                      <th className="p-4 font-medium text-center">K/D Ratio</th>
-                      <th className="p-4 font-medium text-center">Headshot %</th>
-                      <th className="p-4 font-medium text-right">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/50 text-sm">
-                    {filteredMatches.map((match) => {
-                      const kdRatio = match.deaths === 0 ? match.kills.toFixed(2) : (match.kills / match.deaths).toFixed(2);
-                      const isPositive = match.kills >= match.deaths;
+                      <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Headshot</p>
+                            <h3 className="text-4xl font-bold text-white mt-2">{stats.hs}%</h3>
+                          </div>
+                          <Target className="w-6 h-6 text-[#ff4655]" />
+                        </div>
+                      </div>
 
-                      return (
-                        <tr key={match.match_id} className="hover:bg-slate-800/30 transition-colors">
-                          <td className="p-4 whitespace-nowrap">
-                            <span className="text-slate-300 block">{match.date.split(' ')[0]}</span>
-                            <span className="text-slate-500 text-xs">{match.date.split(' ')[1]}</span>
-                          </td>
-                          <td className="p-4 text-slate-300 font-medium">{match.map || '-'}</td>
-                          <td className="p-4">
-                            <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${getClassColor(match.class)}`}>
-                              {match.agent}
-                            </span>
-                          </td>
-                          <td className="p-4 text-center">
-                            <span className={`font-bold ${
-                              match.result === 'Vitória' ? 'text-emerald-400' :
-                              match.result === 'Derrota' ? 'text-red-400' : 'text-slate-400'
-                            }`}>
-                              {match.result || '-'}
-                            </span>
-                          </td>
-                          <td className="p-4 text-center">
-                            <span className="font-bold text-white">{match.kills}</span>
-                            <span className="text-slate-500 mx-1">/</span>
-                            <span className="font-bold text-slate-400">{match.deaths}</span>
-                          </td>
-                          <td className="p-4 text-center">
-                            <span className={`font-bold ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
-                              {kdRatio}
-                            </span>
-                          </td>
-                          <td className="p-4 text-center text-slate-300">{match.headshot_percent}%</td>
-                          <td className="p-4 text-right font-bold text-white">{match.score}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                      <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Score</p>
+                            <h3 className="text-4xl font-bold text-white mt-2">{stats.score}</h3>
+                          </div>
+                          <Trophy className="w-6 h-6 text-[#ff4655]" />
+                        </div>
+                      </div>
+
+                      <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Win Rate</p>
+                            <h3 className="text-4xl font-bold text-white mt-2">{extraStats.winRate}%</h3>
+                          </div>
+                          <Activity className="w-6 h-6 text-[#ff4655]" />
+                        </div>
+                      </div>
+
+                      <div className="bg-[#1f2326] border-t-4 border-t-[#ff4655] rounded-b-xl shadow-lg p-6">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="text-slate-400 text-sm font-medium uppercase tracking-wider">Melhor Mapa</p>
+                            <h3 className="text-xl font-bold text-white mt-2 truncate max-w-[120px]" title={extraStats.favoriteMap}>
+                              {extraStats.favoriteMap}
+                            </h3>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#1f2326] rounded-xl shadow-lg p-6 border border-slate-800">
+                      <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+                        <Calendar className="w-5 h-5 text-[#ff4655]" />
+                        Kills vs Mortes
+                      </h2>
+                      <div className="h-80 w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#2d3748" vertical={false} />
+                            <XAxis dataKey="name" stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
+                            <YAxis stroke="#a0aec0" fontSize={12} tickLine={false} axisLine={false} />
+                            <Tooltip contentStyle={{ backgroundColor: '#1a202c', borderColor: '#2d3748', borderRadius: '8px', color: '#fff' }} />
+                            <Legend />
+                            <Bar dataKey="Kills" fill="#ff4655" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                            <Bar dataKey="Deaths" fill="#4a5568" radius={[4, 4, 0, 0]} maxBarSize={50} />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="bg-[#1f2326] rounded-xl shadow-lg border border-slate-800 overflow-hidden">
+                      <div className="p-6 border-b border-slate-800">
+                        <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                          <User className="w-5 h-5 text-[#ff4655]" />
+                          Histórico de Partidas
+                        </h2>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-[#161a1d] text-slate-400 text-sm uppercase tracking-wider">
+                              <th className="p-4 font-medium">Data</th>
+                              <th className="p-4 font-medium">Mapa</th>
+                              <th className="p-4 font-medium">Agente</th>
+                              <th className="p-4 font-medium text-center">Resultado</th>
+                              <th className="p-4 font-medium text-center">K/D</th>
+                              <th className="p-4 font-medium text-center">K/D Ratio</th>
+                              <th className="p-4 font-medium text-center">Headshot %</th>
+                              <th className="p-4 font-medium text-right">Score</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-800/50 text-sm">
+                            {filteredMatches.map((match) => {
+                              const kdRatio = match.deaths === 0 ? match.kills.toFixed(2) : (match.kills / match.deaths).toFixed(2);
+                              const isPositive = match.kills >= match.deaths;
+
+                              return (
+                                <tr key={match.match_id} className="hover:bg-slate-800/30 transition-colors">
+                                  <td className="p-4 whitespace-nowrap">
+                                    <span className="text-slate-300 block">{match.date.split(' ')[0]}</span>
+                                    <span className="text-slate-500 text-xs">{match.date.split(' ')[1]}</span>
+                                  </td>
+                                  <td className="p-4 text-slate-300 font-medium">{match.map || '-'}</td>
+                                  <td className="p-4">
+                                    <span className={`px-2.5 py-1 text-xs font-semibold rounded-full border ${getClassColor(match.class)}`}>
+                                      {match.agent}
+                                    </span>
+                                  </td>
+                                  <td className="p-4 text-center">
+                                    <span className={`font-bold ${
+                                      match.result === 'Vitória' ? 'text-emerald-400' :
+                                      match.result === 'Derrota' ? 'text-red-400' : 'text-slate-400'
+                                    }`}>
+                                      {match.result || '-'}
+                                    </span>
+                                  </td>
+                                  <td className="p-4 text-center">
+                                    <span className="font-bold text-white">{match.kills}</span>
+                                    <span className="text-slate-500 mx-1">/</span>
+                                    <span className="font-bold text-slate-400">{match.deaths}</span>
+                                  </td>
+                                  <td className="p-4 text-center">
+                                    <span className={`font-bold ${isPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                                      {kdRatio}
+                                    </span>
+                                  </td>
+                                  <td className="p-4 text-center text-slate-300">{match.headshot_percent}%</td>
+                                  <td className="p-4 text-right font-bold text-white">{match.score}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
 
         {/* ABA 2: LEADERBOARD SEMANAL */}
         {activeTab === 'global' && (
           <div className="space-y-8">
-            <div>
-              <h1 className="text-3xl font-bold text-white tracking-wide uppercase flex items-center gap-3">
-                <Users className="text-[#ff4655]" /> Placar de Líderes Semanal
-              </h1>
-              <p className="text-slate-400 mt-1">Clique em qualquer jogador para ver suas estatísticas detalhadas.</p>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+              <div>
+                <h1 className="text-3xl font-bold text-white tracking-wide uppercase flex items-center gap-3">
+                  <Users className="text-[#ff4655]" /> Placar de Líderes Semanal
+                </h1>
+                <p className="text-slate-400 mt-1">
+                  Período: {formatWeekRange(leaderboard.week_start)} (Seg 00:00 – Dom 23:59) • Clique em um jogador para ver seu perfil.
+                </p>
+              </div>
             </div>
 
-            {!leaderboard.highlights ? (
+            {/* Sub-abas do Leaderboard: Semana Atual vs Semanas Anteriores */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleGlobalSubTabChange('current')}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${
+                    globalSubTab === 'current'
+                      ? 'bg-[#ff4655] text-white'
+                      : 'bg-[#1f2326] text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <Calendar className="w-4 h-4" />
+                  Semana Atual ({formatWeekRange(leaderboard.current_week)})
+                </button>
+                <button
+                  onClick={() => handleGlobalSubTabChange('past')}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-2 ${
+                    globalSubTab === 'past'
+                      ? 'bg-[#ff4655] text-white'
+                      : 'bg-[#1f2326] text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <History className="w-4 h-4" />
+                  Semanas Anteriores
+                </button>
+              </div>
+
+              {globalSubTab === 'past' && globalPastWeeks.length > 0 && (
+                <select
+                  value={selectedGlobalWeek}
+                  onChange={(e) => {
+                    setSelectedGlobalWeek(e.target.value);
+                    fetchGlobalWeek(e.target.value);
+                  }}
+                  className="bg-[#1f2326] border border-slate-700 rounded-lg px-3 py-2 text-sm font-semibold text-white outline-none cursor-pointer"
+                >
+                  {globalPastWeeks.map((w, idx) => (
+                    <option key={w} value={w}>
+                      {idx === 0 ? `Semana Recém-Encerrada (${formatWeekRange(w)})` : `Semana de ${formatWeekRange(w)}`}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
+            {globalSubTab === 'past' && globalPastWeeks.length === 0 ? (
+              <div className="bg-[#1f2326] rounded-xl p-8 border border-slate-800 text-center text-slate-400">
+                Nenhuma semana anterior registrada ainda.
+              </div>
+            ) : !leaderboard.highlights ? (
               <div className="bg-[#1f2326] rounded-xl p-8 border border-slate-800 text-center text-slate-400">
                 Nenhuma partida registrada nesta semana ainda.
               </div>
@@ -514,7 +716,7 @@ function ValorantDashboard() {
                   <div className="bg-[#1f2326] border-t-4 border-t-red-600 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
                       <div className="min-w-0">
-                        <p className="text-red-500 text-xs font-bold uppercase tracking-wider">Fracassado da Semana</p>
+                        <p className="text-red-500 text-xs font-bold uppercase tracking-wider">Pior da Semana</p>
                         <button
                           onClick={() => handleViewPlayer(leaderboard.highlights.worst.id_player)}
                           className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"
@@ -571,7 +773,7 @@ function ValorantDashboard() {
                   <div className="bg-[#1f2326] border-t-4 border-t-purple-400 rounded-b-xl p-6 shadow-lg">
                     <div className="flex justify-between items-start">
                       <div className="min-w-0">
-                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Quem gosta de uma cabeça</p>
+                        <p className="text-purple-400 text-xs font-bold uppercase tracking-wider">Maior Taxa de HS</p>
                         <button
                           onClick={() => handleViewPlayer(leaderboard.highlights.top_hs.id_player)}
                           className="text-2xl font-bold text-white mt-1 truncate hover:text-[#ff4655] transition-colors text-left block w-full"

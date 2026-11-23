@@ -25,6 +25,40 @@ AGENT_CLASSES = {
 }
 
 
+def get_current_week_start():
+    """Retorna a data da segunda-feira da semana atual (Horário de Brasília UTC-3) no formato YYYY-MM-DD."""
+    agora_br = datetime.utcnow() - timedelta(hours=3)
+    segunda = agora_br - timedelta(days=agora_br.weekday())
+    return segunda.strftime('%Y-%m-%d')
+
+
+def get_available_weeks(id_player=None):
+    """Retorna todas as segundas-feiras (YYYY-MM-DD) que possuem partidas registradas, da mais recente para a mais antiga."""
+    try:
+        if id_player:
+            query = text("""
+                SELECT DISTINCT TO_CHAR(DATE_TRUNC('week', CAST(date AS TIMESTAMP)), 'YYYY-MM-DD') as week_start
+                FROM stats
+                WHERE id_player = :id
+                ORDER BY week_start DESC
+            """)
+            params = {"id": id_player}
+        else:
+            query = text("""
+                SELECT DISTINCT TO_CHAR(DATE_TRUNC('week', CAST(date AS TIMESTAMP)), 'YYYY-MM-DD') as week_start
+                FROM stats
+                ORDER BY week_start DESC
+            """)
+            params = {}
+
+        with engine.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [row[0] for row in rows if row[0]]
+    except Exception as e:
+        print(f"Erro ao buscar semanas disponíveis: {e}")
+        return []
+
+
 def registrar_jogador(nick, tag, email, senha):
     hash_senha = bcrypt.hashpw(senha.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     try:
@@ -51,11 +85,18 @@ def verificar_login(email, senha_tentativa):
     return None
 
 
-def get_historico_partidas(id_player):
-    """Busca as partidas de um jogador específico."""
+def get_historico_partidas(id_player, week_start=None):
+    """Busca as partidas de um jogador dentro de uma semana fixa (Segunda 00:00 a Domingo 23:59)."""
+    ws = week_start or get_current_week_start()
     try:
-        query = f"SELECT * FROM stats WHERE id_player = {id_player} ORDER BY date DESC"
-        df = pd.read_sql(query, engine)
+        query = text("""
+            SELECT * FROM stats
+            WHERE id_player = :id
+              AND CAST(date AS TIMESTAMP) >= CAST(:ws AS TIMESTAMP)
+              AND CAST(date AS TIMESTAMP) < CAST(:ws AS TIMESTAMP) + INTERVAL '7 days'
+            ORDER BY date DESC
+        """)
+        df = pd.read_sql(query, engine, params={"id": id_player, "ws": ws})
         if df.empty:
             return []
         df['date'] = df['date'].astype(str)
@@ -66,11 +107,8 @@ def get_historico_partidas(id_player):
 
 
 def fetch_latest_matches(nick, tag):
-    # urllib.parse evita que nicks com espaço quebrem a requisição
     nick_seguro = urllib.parse.quote(nick.strip())
     tag_segura = urllib.parse.quote(tag.strip().lstrip('#'))
-
-    # size=100 traz o histórico máximo permitido pela API de uma só vez
     url = f"https://api.henrikdev.xyz/valorant/v3/matches/na/{nick_seguro}/{tag_segura}?mode=competitive&size=100"
 
     headers = {"Authorization": api_key}
@@ -135,18 +173,12 @@ def get_player_profile(id_player):
 def process_matches(matches_data, nick, tag, id_player):
     my_stats = []
 
-    agora = datetime.now()
-    limite_7_dias = agora - timedelta(days=7)
-
     for match in matches_data:
         if match.get('metadata') is None or match.get('players') is None:
             continue
 
-        match_start = datetime.fromtimestamp(match['metadata']['game_start'])
-
-        # Se a partida for mais antiga que 7 dias atrás, descarta
-        if match_start < limite_7_dias:
-            continue
+        # Converte o timestamp da partida para horário de Brasília (UTC-3)
+        match_start = datetime.utcfromtimestamp(match['metadata']['game_start']) - timedelta(hours=3)
 
         my_player = next((p for p in match['players']['all_players'] if
                           p['name'].lower().strip() == nick.lower().strip() and p[
@@ -189,7 +221,6 @@ def process_matches(matches_data, nick, tag, id_player):
             }
             my_stats.append(stats)
 
-    # Pega o card da partida mais recente e atualiza o perfil (fora do loop!)
     card_url = None
     for match in matches_data:
         if match.get('players'):
@@ -241,9 +272,13 @@ def update_database(new_df):
         raise e
 
 
-def get_leaderboard():
+def get_leaderboard(week_start=None):
+    ws = week_start or get_current_week_start()
+    available_weeks = get_available_weeks()
+    current_week = get_current_week_start()
+
     try:
-        query = """
+        query = text("""
             SELECT p.id_player, p.nick, p.player_tag,
                    COUNT(s.match_id) as partidas,
                    SUM(s.kills) as total_kills,
@@ -254,12 +289,20 @@ def get_leaderboard():
                    SUM(CASE WHEN s.result = 'Vitória' THEN 1 ELSE 0 END) as vitorias
             FROM player p
             JOIN stats s ON p.id_player = s.id_player
-            WHERE CAST(s.date AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '7 days'
+            WHERE CAST(s.date AS TIMESTAMP) >= CAST(:ws AS TIMESTAMP)
+              AND CAST(s.date AS TIMESTAMP) < CAST(:ws AS TIMESTAMP) + INTERVAL '7 days'
             GROUP BY p.id_player, p.nick, p.player_tag
-        """
-        df = pd.read_sql(query, engine)
+        """)
+        df = pd.read_sql(query, engine, params={"ws": ws})
         if df.empty:
-            return {"highlights": None, "best_by_class": {}, "ranking": []}
+            return {
+                "week_start": ws,
+                "current_week": current_week,
+                "available_weeks": available_weeks,
+                "highlights": None,
+                "best_by_class": {},
+                "ranking": []
+            }
 
         df['kd'] = df.apply(
             lambda r: round(r['total_kills'] / r['total_deaths'], 2) if r['total_deaths'] > 0 else float(r['total_kills']),
@@ -270,10 +313,9 @@ def get_leaderboard():
         df['hs_medio'] = df['hs_medio'].round(1)
         df['win_rate'] = ((df['vitorias'] / df['partidas']) * 100).round(1)
 
-        # 1. Rating Geral (priorizando K/D, Score e Partidas)
         df['rating'] = (
             (df['kd'] * 45) +
-            (df['score_medio'] * 0.020) +
+            (df['score_medio'] * 0.015) +
             (df['partidas'] * 1.5) +
             (df['hs_medio'] * 0.2) +
             (df['media_kills'] * 0.8)
@@ -290,8 +332,7 @@ def get_leaderboard():
             "most_wins": df.loc[df['vitorias'].idxmax()].to_dict(),
         }
 
-        # Melhor jogador por classe de agente
-        class_query = """
+        class_query = text("""
             SELECT p.id_player, p.nick, p.player_tag, s.class,
                    COUNT(s.match_id) as partidas,
                    SUM(s.kills) as total_kills,
@@ -302,11 +343,12 @@ def get_leaderboard():
                    SUM(CASE WHEN s.result = 'Vitória' THEN 1 ELSE 0 END) as vitorias
             FROM player p
             JOIN stats s ON p.id_player = s.id_player
-            WHERE CAST(s.date AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '7 days'
+            WHERE CAST(s.date AS TIMESTAMP) >= CAST(:ws AS TIMESTAMP)
+              AND CAST(s.date AS TIMESTAMP) < CAST(:ws AS TIMESTAMP) + INTERVAL '7 days'
               AND s.class IN ('Duelist', 'Initiator', 'Controller', 'Sentinel')
             GROUP BY p.id_player, p.nick, p.player_tag, s.class
-        """
-        df_class = pd.read_sql(class_query, engine)
+        """)
+        df_class = pd.read_sql(class_query, engine, params={"ws": ws})
         best_by_class = {}
 
         if not df_class.empty:
@@ -317,11 +359,10 @@ def get_leaderboard():
             df_class['media_kills'] = df_class['media_kills'].round(1)
             df_class['win_rate'] = ((df_class['vitorias'] / df_class['partidas']) * 100).round(1)
 
-            # 2. Rating por Classe (usando df_class)
             df_class['rating'] = (
                 (df_class['kd'] * 45) +
-                (df_class['score_medio'] * 0.020) +
-                (df_class['partidas'] * 2) +
+                (df_class['score_medio'] * 0.015) +
+                (df_class['partidas'] * 1.5) +
                 (df_class['hs_medio'] * 0.2) +
                 (df_class['media_kills'] * 0.8)
             ).round(1)
@@ -332,10 +373,20 @@ def get_leaderboard():
                     best_by_class[role] = sub.loc[sub['rating'].idxmax()].to_dict()
 
         return {
+            "week_start": ws,
+            "current_week": current_week,
+            "available_weeks": available_weeks,
             "highlights": highlights,
             "best_by_class": best_by_class,
             "ranking": df.to_dict(orient='records')
         }
     except Exception as e:
         print(f"Erro ao gerar leaderboard: {e}")
-        return {"highlights": None, "best_by_class": {}, "ranking": []}
+        return {
+            "week_start": ws,
+            "current_week": current_week,
+            "available_weeks": available_weeks,
+            "highlights": None,
+            "best_by_class": {},
+            "ranking": []
+        }
